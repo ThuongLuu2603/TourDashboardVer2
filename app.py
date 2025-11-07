@@ -87,24 +87,45 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # Nhập nguồn dữ liệu (đặt trước khi load dữ liệu)
+# Mặc định sử dụng Google Sheet với link cố định
+DEFAULT_DATANET_URL = 'https://docs.google.com/spreadsheets/d/1CljNuZ4WVNXGL7J111ZhVT9FPCVZDQsB6L5UHMgYeAc/edit?gid=1385215662#gid=1385215662'
+DEFAULT_PLAN_URL = 'https://docs.google.com/spreadsheets/d/1CljNuZ4WVNXGL7J111ZhVT9FPCVZDQsB6L5UHMgYeAc/edit?gid=322447784#gid=322447784'
+
 with st.sidebar:
     st.markdown("---")
     st.subheader("Nguồn dữ liệu")
-    use_sheet = st.checkbox("Dùng Google Sheet (CSV public)", value=st.session_state.get('use_sheet', False))
-    sheet_url = st.text_input(
-        "Link Google Sheet (datanet)",
-        value=st.session_state.get('sheet_url', ''),
-        help="Dán link Google Sheet (bấm Share → Anyone with the link → Viewer). Có thể giữ #gid hiện tại."
-    )
-    plan_sheet_url = st.text_input(
-        "Link Google Sheet (Kế hoạch)",
-        value=st.session_state.get('plan_sheet_url', ''),
-        help="(Tùy chọn) Dán link Google Sheet chứa Kế hoạch. Header ở hàng 2, các đơn vị bắt đầu từ cột E, mỗi đơn vị chiếm 4 cột (Khách, Doanh thu, Lợi nhuận)."
-    )
-    # Lưu lại vào session_state để sử dụng khi load
-    st.session_state['use_sheet'] = use_sheet
-    st.session_state['sheet_url'] = sheet_url
-    st.session_state['plan_sheet_url'] = plan_sheet_url
+    
+    # Khởi tạo giá trị mặc định trong session_state nếu chưa có
+    if 'use_sheet' not in st.session_state:
+        st.session_state['use_sheet'] = True
+    if 'sheet_url' not in st.session_state:
+        st.session_state['sheet_url'] = DEFAULT_DATANET_URL
+    if 'plan_sheet_url' not in st.session_state:
+        st.session_state['plan_sheet_url'] = DEFAULT_PLAN_URL
+    
+    use_sheet = st.checkbox("Dùng Google Sheet (CSV public)", value=st.session_state.get('use_sheet', True))
+    
+    # Expander để người dùng có thể thay đổi link nếu cần
+    with st.expander("🔧 Thay đổi nguồn dữ liệu", expanded=False):
+        sheet_url = st.text_input(
+            "Link Google Sheet (datanet)",
+            value=st.session_state.get('sheet_url', DEFAULT_DATANET_URL),
+            help="Dán link Google Sheet (bấm Share → Anyone with the link → Viewer). Có thể giữ #gid hiện tại."
+        )
+        plan_sheet_url = st.text_input(
+            "Link Google Sheet (Kế hoạch)",
+            value=st.session_state.get('plan_sheet_url', DEFAULT_PLAN_URL),
+            help="Link Google Sheet chứa Kế hoạch. Header ở hàng 2, các đơn vị bắt đầu từ cột E, mỗi đơn vị chiếm 4 cột (Khách, Doanh thu, Lợi nhuận)."
+        )
+        # Lưu lại vào session_state để sử dụng khi load
+        st.session_state['use_sheet'] = use_sheet
+        st.session_state['sheet_url'] = sheet_url
+        st.session_state['plan_sheet_url'] = plan_sheet_url
+    
+    # Hiển thị thông tin nguồn đang dùng (rút gọn)
+    if use_sheet:
+        st.caption(f"📊 Datanet: ...{st.session_state['sheet_url'][-20:]}")
+        st.caption(f"📋 Kế hoạch: ...{st.session_state['plan_sheet_url'][-20:]}")
 
 # Initialize session state for data
 # Load data when not already loaded or when explicitly requested (data_loaded flag False)
