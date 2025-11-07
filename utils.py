@@ -103,19 +103,30 @@ def calculate_kpis(tours_df, plans_df, start_date, end_date, plans_daily_df=None
     planned_customers = 0
 
     # Calculate plans based on period type for correct business logic
+    # IMPORTANT: For Tháng/Quý/Năm, we want the FULL period plan (not just up to end_dt from sidebar)
+    # because users expect to see the full month/quarter/year target even if they selected a partial date range
     if period_type == "Tháng":
-        # For monthly reports: use the month/year from the selected start_date (not today's date)
+        # For monthly reports: use the FULL month from start_date
         current_month = start_dt.month
         current_year = start_dt.year
         plan_mask = (plans_df['year'] == current_year) & (plans_df['month'] == current_month)
     elif period_type == "Quý":
-        # For quarterly reports: respect the selected date window and use months between start and end
+        # For quarterly reports: use the FULL quarter that contains start_date
+        current_quarter = (start_dt.month - 1) // 3 + 1
         current_year = start_dt.year
-        plan_mask = (plans_df['year'] == current_year) & (plans_df['month'] >= start_dt.month) & (plans_df['month'] <= end_dt.month)
+        quarter_months = list(range(3 * current_quarter - 2, 3 * current_quarter + 1))
+        plan_mask = (plans_df['year'] == current_year) & (plans_df['month'].isin(quarter_months))
     elif period_type == "Năm":
-        # For yearly reports: respect the selected date window (use months between start and end within the year)
+        # For yearly reports: PREFER annual TOTAL row (month==0) if it exists
+        # If not, fall back to summing all 12 months
         current_year = start_dt.year
-        plan_mask = (plans_df['year'] == current_year) & (plans_df['month'] >= start_dt.month) & (plans_df['month'] <= end_dt.month)
+        annual_rows = plans_df[(plans_df['year'] == current_year) & (plans_df['month'] == 0)] if not plans_df.empty else pd.DataFrame()
+        if not annual_rows.empty:
+            # Use annual TOTAL row directly (no mask needed)
+            plan_mask = (plans_df['year'] == current_year) & (plans_df['month'] == 0)
+        else:
+            # Fall back to all months in the year
+            plan_mask = (plans_df['year'] == current_year)
     else:
         # For custom periods or week: prefer daily breakdown when available.
         # If daily plans exist, sum exact days inside the window. Otherwise fall back to
@@ -226,45 +237,50 @@ def calculate_kpis(tours_df, plans_df, start_date, end_date, plans_daily_df=None
             except Exception:
                 pass
 
-            # Prorate month-level plans by overlap with the selected date window
-            try:
-                from calendar import monthrange
-                total_rev = 0.0
-                total_prof = 0.0
-                total_cust = 0.0
-                for _, prow in period_plans.iterrows():
-                    y = int(prow.get('year', start_dt.year))
-                    m = int(prow.get('month', start_dt.month) or start_dt.month)
-                    # skip annual rows here (month==0) — they are handled elsewhere
-                    if m == 0:
-                        continue
-                    dim = monthrange(y, m)[1]
-                    month_start = pd.to_datetime(datetime(y, m, 1))
-                    month_end = pd.to_datetime(datetime(y, m, dim))
-                    overlap_start = max(start_dt, month_start)
-                    overlap_end = min(end_dt, month_end)
-                    overlap_days = (overlap_end - overlap_start).days + 1
-                    if overlap_days <= 0:
-                        continue
-                    frac = float(overlap_days) / float(dim)
-                    total_rev += float(prow.get('planned_revenue', 0.0)) * frac
-                    total_prof += float(prow.get('planned_gross_profit', 0.0)) * frac
-                    total_cust += float(prow.get('planned_customers', 0.0)) * frac
-
-                planned_revenue = total_rev
-                planned_gross_profit = total_prof
-                planned_customers = int(round(total_cust))
-            except Exception:
-                # Fallback to naive sum if anything goes wrong
+            # For Tháng/Quý/Năm: take FULL period plans (no prorating)
+            # For Tuần/Tùy chỉnh: prorate by overlap days
+            if period_type in ["Tháng", "Quý", "Năm"]:
+                # No prorating — sum all monthly rows in the period mask
                 planned_revenue = period_plans['planned_revenue'].sum()
                 planned_gross_profit = period_plans['planned_gross_profit'].sum()
                 planned_customers = period_plans['planned_customers'].sum()
+            else:
+                # Prorate month-level plans by overlap with the selected date window (for Tuần/Tùy chỉnh only)
+                try:
+                    from calendar import monthrange
+                    total_rev = 0.0
+                    total_prof = 0.0
+                    total_cust = 0.0
+                    for _, prow in period_plans.iterrows():
+                        y = int(prow.get('year', start_dt.year))
+                        m = int(prow.get('month', start_dt.month) or start_dt.month)
+                        # skip annual rows here (month==0) — they are handled elsewhere
+                        if m == 0:
+                            continue
+                        dim = monthrange(y, m)[1]
+                        month_start = pd.to_datetime(datetime(y, m, 1))
+                        month_end = pd.to_datetime(datetime(y, m, dim))
+                        overlap_start = max(start_dt, month_start)
+                        overlap_end = min(end_dt, month_end)
+                        overlap_days = (overlap_end - overlap_start).days + 1
+                        if overlap_days <= 0:
+                            continue
+                        frac = float(overlap_days) / float(dim)
+                        total_rev += float(prow.get('planned_revenue', 0.0)) * frac
+                        total_prof += float(prow.get('planned_gross_profit', 0.0)) * frac
+                        total_cust += float(prow.get('planned_customers', 0.0)) * frac
+
+                    planned_revenue = total_rev
+                    planned_gross_profit = total_prof
+                    planned_customers = int(round(total_cust))
+                except Exception:
+                    # Fallback to naive sum if anything goes wrong
+                    planned_revenue = period_plans['planned_revenue'].sum()
+                    planned_gross_profit = period_plans['planned_gross_profit'].sum()
+                    planned_customers = period_plans['planned_customers'].sum()
         else:
             # If there are no monthly rows for the requested period, try using an annual TOTAL row
             try:
-                # compute number of months in the requested period (inclusive)
-                months_in_period = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
-                # Look for annual rows where month==0 for the same year
                 annual_rows = plans_df[(plans_df['year'] == start_dt.year) & (plans_df['month'] == 0)] if not plans_df.empty else pd.DataFrame()
                 if not annual_rows.empty:
                     seg = None if selected_segment is None else str(selected_segment).strip()
@@ -287,10 +303,20 @@ def calculate_kpis(tours_df, plans_df, start_date, end_date, plans_daily_df=None
                         rev_ann = matched['planned_revenue'].sum()
                         prof_ann = matched['planned_gross_profit'].sum()
                         cust_ann = matched['planned_customers'].sum()
-                        frac = float(months_in_period) / 12.0 if months_in_period > 0 else 0
-                        planned_revenue = rev_ann * frac
-                        planned_gross_profit = prof_ann * frac
-                        planned_customers = int(round(cust_ann * frac))
+                        
+                        # For period_type "Năm": use full annual total (no prorating)
+                        # For "Tháng"/"Quý": prorate by months in the period
+                        if period_type == "Năm":
+                            planned_revenue = rev_ann
+                            planned_gross_profit = prof_ann
+                            planned_customers = int(cust_ann)
+                        else:
+                            # Prorate by number of months in the period
+                            months_in_period = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
+                            frac = float(months_in_period) / 12.0 if months_in_period > 0 else 0
+                            planned_revenue = rev_ann * frac
+                            planned_gross_profit = prof_ann * frac
+                            planned_customers = int(round(cust_ann * frac))
             except Exception:
                 # ignore and leave planned values as-is
                 pass
@@ -311,43 +337,10 @@ def calculate_kpis(tours_df, plans_df, start_date, end_date, plans_daily_df=None
                     comp_mask = cand['segment'].isna() | cand['segment'].astype(str).str.strip().eq('') | cand['segment'].astype(str).str.upper().eq('TOTAL')
                     company_plans = cand[comp_mask] if comp_mask.any() else cand
                     if not company_plans.empty:
-                        # Prorate company-level monthly rows by overlap with selected window
-                        try:
-                            from calendar import monthrange
-                            total_rev_c = 0.0
-                            total_prof_c = 0.0
-                            total_cust_c = 0.0
-                            for _, prow in company_plans.iterrows():
-                                y = int(prow.get('year', start_dt.year))
-                                m = int(prow.get('month', start_dt.month) or start_dt.month)
-                                if m == 0:
-                                    # annual row: prorate by months between start and end
-                                    months_in_period = (end_dt.year - start_dt.year) * 12 + (end_dt.month - start_dt.month) + 1
-                                    frac = float(months_in_period) / 12.0 if months_in_period > 0 else 0
-                                    total_rev_c += float(prow.get('planned_revenue', 0.0)) * frac
-                                    total_prof_c += float(prow.get('planned_gross_profit', 0.0)) * frac
-                                    total_cust_c += float(prow.get('planned_customers', 0.0)) * frac
-                                    continue
-                                dim = monthrange(y, m)[1]
-                                month_start = pd.to_datetime(datetime(y, m, 1))
-                                month_end = pd.to_datetime(datetime(y, m, dim))
-                                overlap_start = max(start_dt, month_start)
-                                overlap_end = min(end_dt, month_end)
-                                overlap_days = (overlap_end - overlap_start).days + 1
-                                if overlap_days <= 0:
-                                    continue
-                                frac = float(overlap_days) / float(dim)
-                                total_rev_c += float(prow.get('planned_revenue', 0.0)) * frac
-                                total_prof_c += float(prow.get('planned_gross_profit', 0.0)) * frac
-                                total_cust_c += float(prow.get('planned_customers', 0.0)) * frac
-
-                            planned_revenue = total_rev_c
-                            planned_gross_profit = total_prof_c
-                            planned_customers = int(round(total_cust_c))
-                        except Exception:
-                            planned_revenue = company_plans['planned_revenue'].sum()
-                            planned_gross_profit = company_plans['planned_gross_profit'].sum()
-                            planned_customers = company_plans['planned_customers'].sum()
+                        # For Tháng/Quý/Năm: take FULL period totals (no prorating)
+                        planned_revenue = company_plans['planned_revenue'].sum()
+                        planned_gross_profit = company_plans['planned_gross_profit'].sum()
+                        planned_customers = company_plans['planned_customers'].sum()
     except Exception:
         # if anything goes wrong in this override logic, ignore and keep existing planned values
         pass

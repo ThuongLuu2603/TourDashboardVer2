@@ -193,23 +193,32 @@ with st.sidebar:
     today = datetime.now(vietnam_tz).replace(tzinfo=None) # Naive datetime
     
     if date_option == "Tuần":
-        # 7 ngày gần nhất
-        start_date = today - timedelta(days=6)
+        # Tuần hiện tại (Monday - Sunday)
+        # weekday(): Monday=0, Sunday=6
+        days_since_monday = today.weekday()  # 0=Mon, 6=Sun
+        start_date = today - timedelta(days=days_since_monday)
         start_date = datetime(start_date.year, start_date.month, start_date.day)
-        end_date = today
+        end_date = start_date + timedelta(days=6)  # Sunday of current week
+        end_date = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59)
     elif date_option == "Tháng":
-        # Tháng hiện tại
+        # Toàn bộ tháng hiện tại (01 → last day of month)
+        from calendar import monthrange
         start_date = datetime(today.year, today.month, 1)
-        end_date = today
+        last_day = monthrange(today.year, today.month)[1]
+        end_date = datetime(today.year, today.month, last_day, 23, 59, 59)
     elif date_option == "Quý":
-        # Quý hiện tại
+        # Toàn bộ quý hiện tại (first day Q → last day Q)
+        from calendar import monthrange
         quarter = (today.month - 1) // 3 + 1
-        start_date = datetime(today.year, 3 * quarter - 2, 1)
-        end_date = today
+        start_month = 3 * quarter - 2  # Q1:1, Q2:4, Q3:7, Q4:10
+        end_month = 3 * quarter        # Q1:3, Q2:6, Q3:9, Q4:12
+        start_date = datetime(today.year, start_month, 1)
+        last_day = monthrange(today.year, end_month)[1]
+        end_date = datetime(today.year, end_month, last_day, 23, 59, 59)
     elif date_option == "Năm":
-        # Năm hiện tại
+        # Toàn bộ năm hiện tại (01/01 → 31/12)
         start_date = datetime(today.year, 1, 1)
-        end_date = today
+        end_date = datetime(today.year, 12, 31, 23, 59, 59)
     else:  # Tùy chỉnh
         col1, col2 = st.columns(2)
         with col1:
@@ -744,22 +753,33 @@ with tab1:
     top_profit = get_top_routes(filtered_tours, n=10, metric='profit')
 
     # Hợp nhất dữ liệu Top 10 vào 1 DataFrame duy nhất để so sánh
-    df_merged_top10 = pd.DataFrame({'route': top_revenue['route'].astype(str).tolist()})
+    # Đảm bảo kiểu dữ liệu nhất quán cho cột route và loại bỏ NaN
+    if not top_revenue.empty:
+        top_revenue = top_revenue.copy()
+        top_revenue['route'] = top_revenue['route'].fillna('').astype(str).str.strip()
+        top_revenue = top_revenue[top_revenue['route'] != ''].copy()
     
-    # Đảm bảo kiểu dữ liệu nhất quán cho cột route
-    top_revenue = top_revenue.copy()
-    top_customers = top_customers.copy()
-    top_profit = top_profit.copy()
+    if not top_customers.empty:
+        top_customers = top_customers.copy()
+        top_customers['route'] = top_customers['route'].fillna('').astype(str).str.strip()
+        top_customers = top_customers[top_customers['route'] != ''].copy()
     
-    top_revenue['route'] = top_revenue['route'].astype(str)
-    top_customers['route'] = top_customers['route'].astype(str)
-    top_profit['route'] = top_profit['route'].astype(str)
+    if not top_profit.empty:
+        top_profit = top_profit.copy()
+        top_profit['route'] = top_profit['route'].fillna('').astype(str).str.strip()
+        top_profit = top_profit[top_profit['route'] != ''].copy()
     
-    df_merged_top10 = df_merged_top10.merge(top_revenue[['route', 'revenue']], on='route', how='left')
-    df_merged_top10 = df_merged_top10.merge(top_customers[['route', 'num_customers']], on='route', how='left')
-    df_merged_top10 = df_merged_top10.merge(top_profit[['route', 'gross_profit']], on='route', how='left')
-    df_merged_top10 = df_merged_top10.fillna(0)
-    df_merged_top10 = df_merged_top10.sort_values('revenue', ascending=False) # Sắp xếp theo DT
+    # Tạo DataFrame merge từ top_revenue (đã clean)
+    if not top_revenue.empty:
+        df_merged_top10 = top_revenue[['route', 'revenue']].copy()
+        if not top_customers.empty:
+            df_merged_top10 = df_merged_top10.merge(top_customers[['route', 'num_customers']], on='route', how='left')
+        if not top_profit.empty:
+            df_merged_top10 = df_merged_top10.merge(top_profit[['route', 'gross_profit']], on='route', how='left')
+        df_merged_top10 = df_merged_top10.fillna(0)
+        df_merged_top10 = df_merged_top10.sort_values('revenue', ascending=False) # Sắp xếp theo DT
+    else:
+        df_merged_top10 = pd.DataFrame()
 
     # --- HÀNG 1: BIỂU ĐỒ 1 - SO SÁNH TUYỆT ĐỐI (TRỤC KÉP) ---
     st.markdown("#### Hàng 1: So sánh Giá trị Tuyệt đối (Doanh thu, Lượt khách, Lợi nhuận)")
@@ -931,17 +951,17 @@ with tab2:
     with col1:
         st.markdown("##### Doanh thu (Phân bổ BU)")
         fig_rev_stacked = create_stacked_route_chart(filtered_tours, metric='revenue', title='')
-        st.plotly_chart(fig_rev_stacked, use_container_width=True)
+        st.plotly_chart(fig_rev_stacked, use_container_width=True, key="tab2_rev_stacked")
     
     with col2:
         st.markdown("##### Lượt khách (Phân bổ BU)")
         fig_cust_stacked = create_stacked_route_chart(filtered_tours, metric='num_customers', title='')
-        st.plotly_chart(fig_cust_stacked, use_container_width=True)
+        st.plotly_chart(fig_cust_stacked, use_container_width=True, key="tab2_cust_stacked")
     
     with col3:
         st.markdown("##### Lợi nhuận (Phân bổ BU)")
         fig_profit_stacked = create_stacked_route_chart(filtered_tours, metric='gross_profit', title='')
-        st.plotly_chart(fig_profit_stacked, use_container_width=True)
+        st.plotly_chart(fig_profit_stacked, use_container_width=True, key="tab2_profit_stacked")
     
     st.markdown("")
 
