@@ -1219,11 +1219,12 @@ def create_forecast_chart(tours_df, plans_df, start_date, end_date, date_option,
     # per-period revenue as visible labels on each bar. This provides the
     # requested "số doanh thu thực hiện trên mỗi cột ngày" while preserving
     # the cumulative visual used for run-rate/forecast.
+    # Show cumulative value on bar labels (bar height is already cumulative_actual).
     try:
-        per_bar_text = [format_currency(v) for v in actual_data_points['revenue']]
+        per_bar_text = [format_currency(v) for v in actual_data_points['cumulative_actual']]
     except Exception:
-        # Fallback to numeric formatting
-        per_bar_text = [format_number(v) for v in actual_data_points.get('revenue', [])]
+        # Fallback to numeric formatting of cumulative values
+        per_bar_text = [format_number(v) for v in actual_data_points.get('cumulative_actual', [])]
 
     fig.add_trace(go.Bar(
         x=actual_data_points['date'],
@@ -1234,7 +1235,9 @@ def create_forecast_chart(tours_df, plans_df, start_date, end_date, date_option,
         text=per_bar_text,
         textposition='outside',
         textfont=dict(size=10, color='#FFFFFF'),
-        hovertemplate=f'{x_title}: %{{x|{x_format}}}<br>Thực hiện: %{{customdata[0]:,.0f}} ₫<extra></extra>',
+    hovertemplate=(f'{x_title}: %{{x|{x_format}}}'
+               f'<br>Lũy kế Thực hiện: %{{y:,.0f}} ₫'
+               f'<br>Trong kỳ (không lũy kế): %{{customdata[0]:,.0f}} ₫<extra></extra>'),
         customdata=np.column_stack([actual_data_points['revenue']]) if not actual_data_points.empty else None
     ))
     
