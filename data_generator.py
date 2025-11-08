@@ -264,7 +264,9 @@ def load_or_generate_data(spreadsheet_url=None, plan_spreadsheet_url=None):
                 resp.raise_for_status()
                 # The Google Sheet provided by the user uses header on row 2 (1-based),
                 # so tell pandas to use the second line as header (header=1).
-                df = pd.read_csv(io.StringIO(resp.content.decode('utf-8')), header=1)
+                # Read as strings to preserve original formatting (thousands separators like '24.000')
+                # and let _parse_number handle numeric conversion robustly.
+                df = pd.read_csv(io.StringIO(resp.content.decode('utf-8')), header=1, dtype=str)
                 processed_files.append(csv_url)
 
                 # Column positions (0-based) from Excel letters provided by user
@@ -280,9 +282,22 @@ def load_or_generate_data(spreadsheet_url=None, plan_spreadsheet_url=None):
                     'R': _col_index('R'),
                     'S': _col_index('S'),
                     'T': _col_index('T'),
+                    'U': _col_index('U'),
                 }
 
                 per_file_count = 0
+                # Detect a status-like column by header name (case-insensitive).
+                # Many sheets don't provide a status column; when absent we default
+                # to 'Đã xác nhận' to preserve previous behavior.
+                import re
+                status_idx = None
+                for cidx, cname in enumerate(df.columns):
+                    try:
+                        if isinstance(cname, str) and re.search(r'status|trạng|trang thai|tình trạng|tinh trang', cname, re.I):
+                            status_idx = cidx
+                            break
+                    except Exception:
+                        continue
                 # Iterate using iloc to access by positional column index
                 for _, row in df.iterrows():
                     try:
@@ -329,9 +344,53 @@ def load_or_generate_data(spreadsheet_url=None, plan_spreadsheet_url=None):
                             # If sheet has no value, mark as Unknown rather than using generator defaults
                             sales_channel = 'Unknown'
 
-                        # Do NOT normalize or fallback to generator defaults here.
-                        # Use exactly the value provided by the Google Sheet (or None if empty).
-                        status = "Đã xác nhận"
+                        # Parse cancellation count from column U if present.
+                        cancel_count = 0
+                        cancel_rate = 0.0
+                        try:
+                            if 'U' in idx_map:
+                                raw_cancel = row.iloc[idx_map.get('U')]
+                                if pd.notna(raw_cancel):
+                                    # Users store number of cancelled seats (e.g. '2' meaning 2 customers cancelled)
+                                    parsed_c = _parse_number(str(raw_cancel).strip())
+                                    if parsed_c is None:
+                                        parsed_c = 0
+                                    cancel_count = int(round(parsed_c))
+                        except Exception:
+                            cancel_count = 0
+
+                        # Compute cancel_rate relative to booked seats when possible
+                        try:
+                            if num_booked and num_booked > 0:
+                                cancel_rate = max(0.0, min(1.0, float(cancel_count) / float(num_booked)))
+                            else:
+                                cancel_rate = 0.0
+                        except Exception:
+                            cancel_rate = 0.0
+
+                        # If the sheet contains a status column (detected above), use it and
+                        # normalize common Vietnamese variants; otherwise default to
+                        # 'Đã xác nhận' to preserve existing behavior when the sheet lacks status.
+                        if status_idx is not None:
+                            try:
+                                raw_status = row.iloc[status_idx]
+                                if pd.notna(raw_status):
+                                    st = str(raw_status).strip()
+                                    # normalize common words
+                                    if re.search(r'hủy|huy', st, re.I):
+                                        status = 'Đã hủy'
+                                    elif re.search(r'hoãn|hoan', st, re.I):
+                                        status = 'Hoãn'
+                                    elif re.search(r'xác|xac', st, re.I):
+                                        status = 'Đã xác nhận'
+                                    else:
+                                        status = st
+                                else:
+                                    status = 'Đã xác nhận'
+                            except Exception:
+                                status = 'Đã xác nhận'
+                        else:
+                            status = 'Đã xác nhận'
 
                         if sales_channel == "Online":
                             marketing_cost = revenue * random.uniform(0.02, 0.05)
@@ -349,6 +408,17 @@ def load_or_generate_data(spreadsheet_url=None, plan_spreadsheet_url=None):
                         feedback_ratio = random.uniform(0.7, 0.95)
                         service_cost = cost * random.uniform(0.8, 1.2)
 
+                        # compute effective counts/values after cancellations
+                        num_customers_effective = int(round(max(0, num_booked - cancel_count)))
+                        revenue_effective = float(revenue) * (max(0.0, (num_customers_effective / num_booked)) if num_booked > 0 else 0.0)
+                        gross_profit_effective = float(gross_profit) * (max(0.0, (num_customers_effective / num_booked)) if num_booked > 0 else 0.0)
+
+                        # If all seats canceled, mark as canceled
+                        if cancel_count >= num_booked and num_booked > 0:
+                            final_status = 'Đã hủy'
+                        else:
+                            final_status = status
+
                         tours_records.append({
                             'booking_id': booking_id,
                             'customer_id': customer_id,
@@ -359,13 +429,18 @@ def load_or_generate_data(spreadsheet_url=None, plan_spreadsheet_url=None):
                             'sales_channel': sales_channel,
                             'segment': segment,
                             'num_customers': int(num_booked),
+                            'cancel_count': int(cancel_count),
+                            'cancel_rate': float(cancel_rate),
+                            'num_customers_effective': int(num_customers_effective),
+                            'revenue_effective': float(revenue_effective),
+                            'gross_profit_effective': float(gross_profit_effective),
                             'tour_capacity': int(tour_capacity),
                             'price_per_person': float(price_per_person),
                             'revenue': float(revenue),
                             'cost': float(cost),
                             'gross_profit': float(gross_profit),
                             'gross_profit_margin': float(gross_profit_margin),
-                            'status': status,
+                            'status': final_status,
                             'marketing_cost': float(marketing_cost),
                             'sales_cost': float(sales_cost),
                             'opex': float(opex),
@@ -408,7 +483,9 @@ def load_or_generate_data(spreadsheet_url=None, plan_spreadsheet_url=None):
                 resp = requests.get(plan_csv_url, timeout=15)
                 resp.raise_for_status()
                 # header on row 2 (header=1)
-                dfp = pd.read_csv(io.StringIO(resp.content.decode('utf-8')), header=1)
+                # Read as strings so original cell formatting (e.g. '24.000' meaning 24.000 millions)
+                # is preserved and parsed correctly by _parse_number.
+                dfp = pd.read_csv(io.StringIO(resp.content.decode('utf-8')), header=1, dtype=str)
                 processed_plan_files.append(plan_csv_url)
 
                 # --- First: parse company-level totals in columns A-D (indices 0-3) if present ---

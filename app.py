@@ -54,6 +54,7 @@ from utils import (
     create_top_routes_dual_axis_chart,
     create_top_routes_ratio_stacked,
     create_segment_bu_comparison_chart
+    , group_small_categories
 )
 
 # Page configuration
@@ -435,7 +436,9 @@ with tab1:
         fig_revenue = create_gauge_chart(
             kpis['revenue_completion'],
             "Đạt KH Doanh thu",
-            unit_breakdown=revenue_breakdown
+            unit_breakdown=revenue_breakdown,
+            actual_value=kpis.get('actual_revenue'),
+            planned_value=kpis.get('planned_revenue')
         )
         st.plotly_chart(fig_revenue, use_container_width=True)
     
@@ -444,7 +447,9 @@ with tab1:
         fig_profit = create_gauge_chart(
             profit_completion,
             "Đạt KH Lợi nhuận",
-            unit_breakdown=profit_breakdown
+            unit_breakdown=profit_breakdown,
+            actual_value=kpis.get('actual_gross_profit'),
+            planned_value=kpis.get('planned_gross_profit')
         )
         st.plotly_chart(fig_profit, use_container_width=True)
     
@@ -452,7 +457,9 @@ with tab1:
         fig_customers = create_gauge_chart(
             kpis['customer_completion'],
             "Đạt KH Lượt khách",
-            unit_breakdown=customers_breakdown
+            unit_breakdown=customers_breakdown,
+            actual_value=kpis.get('actual_customers'),
+            planned_value=kpis.get('planned_customers')
         )
         st.plotly_chart(fig_customers, use_container_width=True)
     
@@ -463,6 +470,9 @@ with tab1:
     
     # Lấy dữ liệu cần thiết cho Hàng 2
     unit_performance = get_unit_performance(tours_filtered_dimensional, filtered_plans, start_date, end_date)
+    # Sắp xếp theo tiến độ Doanh thu (từ cao -> thấp) để biểu đồ hiển thị rõ ràng
+    if not unit_performance.empty and 'revenue_completion' in unit_performance.columns:
+        unit_performance = unit_performance.sort_values('revenue_completion', ascending=False).reset_index(drop=True)
     
     with col1:
         st.markdown("##### 📊 Tiến độ KH theo Khu vực")
@@ -636,16 +646,23 @@ with tab1:
         st.plotly_chart(fig_segment_bar, use_container_width=True)
         
     with col2:
-        st.markdown("##### Phân bố Doanh thu (Pie Chart Gốc)")
+        st.markdown("##### Phân bố Doanh thu ")
         # Vẫn giữ 1 Pie Chart Doanh thu để xem tỷ trọng (%)
         if not segment_revenue.empty:
+            # Group small categories (<1%) into 'Khác'
+            seg_grouped = group_small_categories(segment_revenue, value_col='value', name_col='segment', threshold=0.02, other_label='Khác')
             fig = go.Figure(go.Pie(
-                labels=segment_revenue['segment'],
-                values=segment_revenue['value'],
+                labels=seg_grouped['segment'],
+                values=seg_grouped['value'],
                 textinfo='label+percent',
-                marker=dict(colors=SEGMENT_COLORS)
+                marker=dict(colors=SEGMENT_COLORS),
+                domain=dict(x=[0, 1], y=[0, 1])
             ))
-            fig.update_layout(height=350, margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
+            # Attach detailed hover info (for 'Khác' show its components)
+            fig.update_traces(textfont=dict(size=12),
+                              customdata=seg_grouped['detail'],
+                              hovertemplate='<b>%{label}</b><br>%{percent}<br>%{customdata}<extra></extra>')
+            fig.update_layout(height=420, margin=dict(l=10, r=10, t=30, b=40), showlegend=False)
             st.plotly_chart(fig)
 
 
@@ -675,19 +692,26 @@ with tab1:
     with col1:
         st.markdown("##### 📈 So sánh DT, LK, LN theo Khu vực")
         fig_bu_bar = create_segment_bu_comparison_chart(df_bu_long, grouping_col='group') # Hàm mới
-        fig_bu_bar.update_layout(height=350)
+        fig_bu_bar.update_layout(height=450)
         st.plotly_chart(fig_bu_bar, use_container_width=True)
         
     with col2:
-        st.markdown("##### Phân bố Doanh thu Khu vực (Pie Chart Gốc)")
+        st.markdown("##### Phân bố Doanh thu Khu vực ")
         if not bu_revenue.empty:
+            # Group small categories (<1%) into 'Khác'
+            bu_grouped = group_small_categories(bu_revenue.rename(columns={'group': 'group', 'value': 'value'}).rename(columns={'group': 'group'}).assign(**{'group': bu_revenue['group'], 'value': bu_revenue['Revenue']}), value_col='value', name_col='group', threshold=0.02, other_label='Khác')
+            # Use colors; if number of slices > colors, Plotly will cycle colors
             fig = go.Figure(go.Pie(
-                labels=bu_revenue['group'],
-                values=bu_revenue['Revenue'],
+                labels=bu_grouped['group'],
+                values=bu_grouped['value'],
                 textinfo='label+percent',
-                marker=dict(colors=BU_COLORS)
+                marker=dict(colors=BU_COLORS),
+                domain=dict(x=[0, 1], y=[0, 1])
             ))
-            fig.update_layout(height=350, margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
+            fig.update_traces(textfont=dict(size=12),
+                              customdata=bu_grouped['detail'],
+                              hovertemplate='<b>%{label}</b><br>%{percent}<br>%{customdata}<extra></extra>')
+            fig.update_layout(height=420, margin=dict(l=10, r=10, t=30, b=40), showlegend=False)
             st.plotly_chart(fig)
     
     st.markdown("---")
@@ -705,28 +729,80 @@ with tab1:
     with col1:
         st.markdown("#### So sánh Doanh thu Thực hiện và Kế hoạch")
         if not unit_table.empty:
+            # Sort units by actual revenue descending so highest revenue appears left-most
+            unit_table = unit_table.sort_values('revenue', ascending=False).reset_index(drop=True)
+            # Convert to vertical grouped bars (Doanh thu Kế hoạch vs Thực hiện)
+            try:
+                planned_text = [format_currency(v) for v in unit_table['planned_revenue']]
+            except Exception:
+                planned_text = [format_number(v) for v in unit_table['planned_revenue']]
+            try:
+                actual_text = [format_currency(v) for v in unit_table['revenue']]
+            except Exception:
+                actual_text = [format_number(v) for v in unit_table['revenue']]
+
             fig = go.Figure()
             fig.add_trace(go.Bar(
                 x=unit_table['business_unit'],
                 y=unit_table['planned_revenue'],
                 name='Kế hoạch',
-                marker_color='#FFA15A'
+                marker_color='#FFA15A',
+                text=planned_text,
+                textposition='outside',
+                textfont=dict(size=9, color='#000000')
             ))
+
             fig.add_trace(go.Bar(
                 x=unit_table['business_unit'],
                 y=unit_table['revenue'],
                 name='Thực hiện',
-                marker_color='#636EFA'
+                marker_color='#636EFA',
+                text=actual_text,
+                textposition='outside',
+                textfont=dict(size=9, color='#FFFFFF')
             ))
-            fig.update_layout(xaxis_title="", yaxis_title="Doanh thu (₫)", height=300, barmode='group', margin=dict(l=30, r=30, t=10, b=80))
+
+            height = max(400, int(len(unit_table) * 25))
+            fig.update_layout(
+                xaxis_title="Đơn vị",
+                yaxis_title="Doanh thu (₫)",
+                height=height,
+                barmode='group',
+                margin=dict(l=80, r=30, t=10, b=140),
+                xaxis=dict(tickangle=-45, tickfont=dict(size=10), categoryorder='array', categoryarray=unit_table['business_unit'])
+            )
             st.plotly_chart(fig)
     
     with col2:
         st.markdown("#### Tỷ suất Lợi nhuận Gộp theo Đơn vị")
         if not unit_table.empty:
             unit_margin = unit_table[['business_unit', 'profit_margin']].copy()
-            fig = create_profit_margin_chart_with_color(unit_margin, 'profit_margin', 'business_unit', '')
-            st.plotly_chart(fig)
+            # Sort by profit margin descending so highest margin units appear left-most
+            unit_margin = unit_margin.sort_values('profit_margin', ascending=False).reset_index(drop=True)
+            # Build vertical bar chart with continuous color scale
+            fig2 = go.Figure()
+            fig2.add_trace(go.Bar(
+                x=unit_margin['business_unit'],
+                y=unit_margin['profit_margin'],
+                marker=dict(
+                    color=unit_margin['profit_margin'],
+                    colorscale='RdYlGn',
+                    showscale=True,
+                    colorbar=dict(title=dict(text="Tỷ suất LN (%)", side="right")),
+                    cmin=unit_margin['profit_margin'].min(),
+                    cmax=unit_margin['profit_margin'].max()
+                ),
+                text=[f"{v:.1f}%" for v in unit_margin['profit_margin']],
+                textposition='outside'
+            ))
+            fig2.update_layout(
+                xaxis_title='Đơn vị',
+                yaxis_title='Tỷ suất lợi nhuận (%)',
+                height=max(400, int(len(unit_margin) * 25)),
+                margin=dict(l=80, r=80, t=10, b=140),
+                xaxis=dict(tickangle=-45, tickfont=dict(size=10), categoryorder='array', categoryarray=unit_margin['business_unit'])
+            )
+            st.plotly_chart(fig2)
     
     # Row 2: Detailed table
     st.markdown("#### Bảng số liệu chi tiết theo Đơn vị")
@@ -786,7 +862,7 @@ with tab1:
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown("##### 📈 So sánh DT, LK, LN theo Tuyến Tour")
+        st.markdown("##### 📈 So sánh DT, LK, LN theo Top 10 Tuyến Tour")
         if not df_merged_top10.empty:
             # Hàm mới: Biểu đồ cột nhóm/kết hợp với trục kép
             fig_dual_axis = create_top_routes_dual_axis_chart(df_merged_top10) # <--- Hàm mới

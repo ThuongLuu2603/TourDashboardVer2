@@ -60,14 +60,41 @@ def get_growth_rate(current, previous):
 
 
 def filter_data_by_date(df, start_date, end_date, date_column='booking_date'):
-    """Filter dataframe by date range"""
-    
-    if df.empty or date_column not in df.columns:
-        return pd.DataFrame(columns=df.columns)
-        
-    mask = (df[date_column] >= pd.to_datetime(start_date)) & \
-           (df[date_column] <= pd.to_datetime(end_date))
-    return df[mask].copy()
+    """Filter dataframe by date range using the tour START date (Từ ngày / 'booking_date').
+
+    NOTE: Per recent requirement, reporting inclusion is determined only by the tour
+    start date (Google Sheet column E). This helper will therefore always filter
+    on the 'booking_date' column when present. The `date_column` parameter is
+    accepted for compatibility but ignored to ensure consistent start-date-only
+    behavior across the app.
+    """
+
+    if df is None or df.empty:
+        # Preserve columns if possible
+        try:
+            return pd.DataFrame(columns=df.columns)
+        except Exception:
+            return pd.DataFrame()
+
+    # Use canonical start date column name if present
+    start_col_candidates = ['booking_date', 'start_date', 'from_date']
+    col = None
+    for c in start_col_candidates:
+        if c in df.columns:
+            col = c
+            break
+
+    if col is None:
+        # Fallback: if no booking/start column exists, try to use provided date_column
+        if date_column in df.columns:
+            col = date_column
+        else:
+            # Nothing to filter on, return empty frame with same columns
+            return pd.DataFrame(columns=df.columns)
+
+    mask = (pd.to_datetime(df[col]) >= pd.to_datetime(start_date)) & \
+           (pd.to_datetime(df[col]) <= pd.to_datetime(end_date))
+    return df.loc[mask].copy()
 
 
 def filter_confirmed_bookings(df):
@@ -389,7 +416,7 @@ def calculate_kpis(tours_df, plans_df, start_date, end_date, plans_daily_df=None
     }
 
 
-def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdown=None, is_inverse_metric=False):
+def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdown=None, is_inverse_metric=False, actual_value=None, planned_value=None):
     """Create a gauge chart for completion rate with hover info for business units"""
     
     value = value if not pd.isna(value) else 0
@@ -457,12 +484,76 @@ def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdow
             showlegend=False
         ))
     
+    # Make the gauge larger so it reads well when displayed side-by-side
+    # Reduce top margin so gauges sit closer to the page title
     fig.update_layout(
-        height=200,
-        margin=dict(l=10, r=10, t=30, b=5),
+        height=320,
+        margin=dict(l=10, r=10, t=8, b=10),
         hovermode='closest'
     )
-    
+    # The invisible scatter used for hover adds default x/y axes; hide them so
+    # the gauge appears clean (no -0.5..1.5 ticks etc.).
+    try:
+        fig.update_xaxes(visible=False)
+        fig.update_yaxes(visible=False)
+    except Exception:
+        pass
+    # If actual/planned numbers are provided, add a small, non-obstructive annotation
+    # inside the figure (paper coordinates) so it appears "on the chart" but does
+    # not cover the central percentage number.
+    try:
+        if actual_value is not None or planned_value is not None:
+            # Format values: use currency formatting for revenue/profit gauges,
+            # but use plain numbers for customer gauges (no currency symbol).
+            try:
+                title_lc = str(title).lower() if title else ''
+                is_customer_metric = any(k in title_lc for k in ['lượt', 'khách', 'khach', 'customer'])
+
+                use_currency = False
+                if not is_customer_metric:
+                    # For revenue/profit metrics prefer currency formatting when values are large
+                    if (isinstance(actual_value, (int, float)) and abs(actual_value or 0) >= 1000) or \
+                       (isinstance(planned_value, (int, float)) and abs(planned_value or 0) >= 1000):
+                        use_currency = True
+
+                if use_currency:
+                    actual_str = format_currency(actual_value or 0)
+                    planned_str = format_currency(planned_value or 0)
+                else:
+                    actual_str = format_number(actual_value or 0)
+                    planned_str = format_number(planned_value or 0)
+            except Exception:
+                actual_str = str(actual_value or '')
+                planned_str = str(planned_value or '')
+
+            ann_text = f"TH: {actual_str}<br>KH: {planned_str}"
+            # Keep a modest top margin and place the TH/KH annotation below the
+            # chart title so it doesn't overlap. Use paper coords for stable placement.
+            try:
+                fig.update_layout(margin=dict(l=10, r=10, t=20, b=10))
+            except Exception:
+                pass
+
+            fig.add_annotation(
+                x=0.5,
+                y=0.78,
+                xref='paper',
+                yref='paper',
+                xanchor='center',
+                yanchor='top',
+                text=ann_text,
+                showarrow=False,
+                align='center',
+                font=dict(size=10, color='#FFFFFF'),
+                bordercolor='rgba(255,255,255,0.12)',
+                borderwidth=1,
+                bgcolor='rgba(0,0,0,0.5)',
+                opacity=0.95
+            )
+    except Exception:
+        # Don't let annotation errors break the chart
+        pass
+
     return fig
 
 
@@ -502,6 +593,63 @@ def create_pie_chart(data, values, names, title):
     )
     
     return fig
+
+
+def group_small_categories(df, value_col, name_col, threshold=0.02, other_label='Khác'):
+    """
+    Group categories whose share is below `threshold` (fraction, e.g. 0.02 for 2%)
+    into a single `other_label` row and return a new aggregated DataFrame.
+
+    Args:
+        df: DataFrame with at least [name_col, value_col]
+        value_col: column name for numeric values
+        name_col: column name for category labels
+        threshold: fraction threshold under which categories are grouped (0-1)
+        other_label: label to use for grouped small categories
+
+    Returns:
+        DataFrame with columns [name_col, value_col] where small categories
+        are combined into a single row named `other_label`.
+    """
+    if df is None or df.empty:
+        return df
+
+    df2 = df[[name_col, value_col]].copy()
+    # Ensure numeric
+    df2[value_col] = pd.to_numeric(df2[value_col].fillna(0), errors='coerce').fillna(0)
+    total = df2[value_col].sum()
+    if total <= 0:
+        return df2
+
+    df2['pct'] = df2[value_col] / float(total)
+    large = df2[df2['pct'] >= float(threshold)].copy()
+    small = df2[df2['pct'] < float(threshold)].copy()
+
+    other_sum = small[value_col].sum()
+
+    # Prepare detail strings: for each large row include its value and pct;
+    # for the 'other' row include a newline-separated list of small components.
+    def fmt_row(row):
+        return f"{row[name_col]}: {format_currency(row[value_col])} ({row['pct']*100:.2f}%)"
+
+    parts = []
+    if other_sum > 0:
+        # build large rows
+        for _, r in large.iterrows():
+            parts.append({name_col: r[name_col], value_col: r[value_col], 'detail': fmt_row(r)})
+
+        # build 'other' detail listing
+        small_lines = [f"{r[name_col]}: {format_currency(r[value_col])} ({r['pct']*100:.2f}%)" for _, r in small.iterrows()]
+        other_detail = "<br>".join(small_lines)
+        parts.append({name_col: other_label, value_col: other_sum, 'detail': other_detail})
+    else:
+        for _, r in large.iterrows():
+            parts.append({name_col: r[name_col], value_col: r[value_col], 'detail': fmt_row(r)})
+
+    result = pd.DataFrame(parts)
+    # Sort descending by value for consistent display
+    result = result.sort_values(by=value_col, ascending=False).reset_index(drop=True)
+    return result
 
 
 def create_line_chart(data, x, y, title, color=None):
@@ -963,10 +1111,63 @@ def create_forecast_chart(tours_df, plans_df, start_date, end_date, date_option,
                 period_plans = period_plans[period_plans['business_unit'].fillna('').str.upper().str.contains('TOAN|TOÀN')]
         except Exception:
             pass
-        total_planned_revenue = period_plans['planned_revenue'].sum()
+        # Compute planned revenue for the selected period by prorating monthly totals by overlap days
+        total_planned_revenue = 0.0
+        try:
+            from calendar import monthrange
+            # Build list of months between start_dt and period_end_dt (inclusive)
+            s = start_dt.replace(day=1)
+            e = period_end_dt.replace(day=1)
+            months = []
+            cur = s
+            while cur <= e:
+                months.append((int(cur.year), int(cur.month)))
+                # advance month
+                if cur.month == 12:
+                    cur = cur.replace(year=cur.year+1, month=1)
+                else:
+                    cur = cur.replace(month=cur.month+1)
+
+            # For each month, get the monthly plan amount (preferring company-level rows if present)
+            for (y, m) in months:
+                # days in this month
+                dim = monthrange(y, m)[1]
+                month_start = pd.to_datetime(datetime(y, m, 1))
+                month_end = pd.to_datetime(datetime(y, m, dim))
+                # overlap with our period
+                overlap_start = max(pd.to_datetime(start_dt), month_start)
+                overlap_end = min(pd.to_datetime(period_end_dt), month_end)
+                overlap_days = (overlap_end - overlap_start).days + 1
+                if overlap_days <= 0:
+                    continue
+
+                # Sum planned_revenue for this month (respecting company-level preference applied earlier)
+                pmask = (plans_df['year'] == y) & (plans_df['month'] == m)
+                month_plans = plans_df[pmask] if not plans_df.empty else pd.DataFrame()
+                if month_plans.empty:
+                    continue
+                # If prefer company-level totals, try to filter to company rows
+                try:
+                    seg = None if selected_segment is None else str(selected_segment).strip().upper()
+                    prefer_company = seg in (None, '') or seg in ('TẤT CẢ', 'TAT CA', 'ALL')
+                    if prefer_company and month_plans['business_unit'].fillna('').str.upper().str.contains('TOAN|TOÀN').any():
+                        comp_mask = month_plans['business_unit'].fillna('').str.upper().str.contains('TOAN|TOÀN') & (
+                            month_plans['segment'].isna() | month_plans['segment'].astype(str).str.strip().eq('') | month_plans['segment'].astype(str).str.upper().eq('TOTAL')
+                        )
+                        if comp_mask.any():
+                            month_plans = month_plans[comp_mask]
+                except Exception:
+                    pass
+
+                rev_month = month_plans['planned_revenue'].sum()
+                # Add prorated portion for this month's overlap
+                total_planned_revenue += rev_month * (float(overlap_days) / float(dim))
+        except Exception:
+            # Fallback: use naive sum if prorating fails
+            total_planned_revenue = period_plans['planned_revenue'].sum()
 
         # If monthly period_plans are empty (or sum to zero) but an annual TOTAL exists, use/prorate it
-        if (period_plans.empty or total_planned_revenue == 0) and not plans_df.empty:
+        if (total_planned_revenue == 0) and not plans_df.empty:
             try:
                 months_in_period = (period_end_dt.year - start_dt.year) * 12 + (period_end_dt.month - start_dt.month) + 1
                 annual_rows = plans_df[(plans_df['year'] == start_dt.year) & (plans_df['month'] == 0)]
@@ -995,6 +1196,7 @@ def create_forecast_chart(tours_df, plans_df, start_date, end_date, date_option,
         total_days_in_period = (period_end_dt - start_dt).days + 1
         daily_plan_rate = total_planned_revenue / total_days_in_period if total_days_in_period > 0 else 0
         daily_plan_line = pd.DataFrame({'date': plan_date_range})
+        # cumulative planned: day 1 -> daily_plan_rate, day N -> N * daily_plan_rate
         daily_plan_line['cumulative_planned'] = (daily_plan_line['date'] - start_dt).dt.days * daily_plan_rate + daily_plan_rate
     
     # Tính Dự báo Run-rate 
@@ -1013,14 +1215,27 @@ def create_forecast_chart(tours_df, plans_df, start_date, end_date, date_option,
     
     fig = go.Figure()
 
-    # Trace 1: Thực hiện Lũy kế (Dạng cột - ĐÃ SỬA LỖI WIDTH)
+    # Trace 1: Thực hiện Lũy kế (Dạng cột) — keep cumulative height but show
+    # per-period revenue as visible labels on each bar. This provides the
+    # requested "số doanh thu thực hiện trên mỗi cột ngày" while preserving
+    # the cumulative visual used for run-rate/forecast.
+    try:
+        per_bar_text = [format_currency(v) for v in actual_data_points['revenue']]
+    except Exception:
+        # Fallback to numeric formatting
+        per_bar_text = [format_number(v) for v in actual_data_points.get('revenue', [])]
+
     fig.add_trace(go.Bar(
         x=actual_data_points['date'],
         y=actual_data_points['cumulative_actual'],
         name='Thực hiện Lũy kế',
         marker_color='#636EFA',
         width=bar_width,
-        hovertemplate=f'{x_title}: %{{x|{x_format}}}<br>Thực hiện: %{{y:,.0f}} ₫<extra></extra>'
+        text=per_bar_text,
+        textposition='outside',
+        textfont=dict(size=10, color='#FFFFFF'),
+        hovertemplate=f'{x_title}: %{{x|{x_format}}}<br>Thực hiện: %{{customdata[0]:,.0f}} ₫<extra></extra>',
+        customdata=np.column_stack([actual_data_points['revenue']]) if not actual_data_points.empty else None
     ))
     
     # Trace 2: Kế hoạch Lũy kế (Đường)
@@ -1064,7 +1279,45 @@ def create_forecast_chart(tours_df, plans_df, start_date, end_date, date_option,
     )
     
     fig.update_xaxes(tickformat=x_format, title=x_title, tickangle=0)
-    
+    # --- 6. Thêm chú thích hiển thị Số thực hiện / Số kế hoạch (định dạng tiền) ---
+    try:
+        planned_val = float(total_planned_revenue or 0)
+    except Exception:
+        planned_val = 0.0
+    try:
+        actual_val = float(current_actual_revenue or 0)
+    except Exception:
+        actual_val = 0.0
+
+    # Tính phần trăm hoàn thành an toàn
+    pct = (actual_val / planned_val * 100) if planned_val > 0 else 0
+
+    # Xác định vị trí chú thích: gần cạnh phải trên cùng của chart
+    try:
+        max_y = max(
+            actual_data_points['cumulative_actual'].max() if not actual_data_points.empty else 0,
+            daily_plan_line['cumulative_planned'].max() if (isinstance(daily_plan_line, pd.DataFrame) and 'cumulative_planned' in daily_plan_line.columns and not daily_plan_line.empty) else 0,
+            forecast_dates_extended['cumulative_forecast'].max() if 'cumulative_forecast' in forecast_dates_extended.columns and not forecast_dates_extended.empty else 0
+        )
+    except Exception:
+        max_y = max(planned_val, actual_val, 1)
+
+    # Format text using existing format_currency helper
+    info_text = f"Thực hiện: {format_currency(actual_val)} / Kế hoạch: {format_currency(planned_val)}<br>Hoàn thành: {pct:.1f}%"
+    fig.add_annotation(
+        x=period_end_dt,
+        y=max_y * 0.95,
+        xref='x',
+        yref='y',
+        text=info_text,
+        showarrow=False,
+        align='right',
+        font=dict(size=12, color='#FFFFFF'),
+        bordercolor='#333333',
+        borderwidth=1,
+        bgcolor='rgba(0,0,0,0.5)'
+    )
+
     return fig
 
 def create_trend_chart(tours_df, start_date, end_date, metrics=['revenue', 'customers', 'profit']):
@@ -1116,31 +1369,58 @@ def create_trend_chart(tours_df, start_date, end_date, metrics=['revenue', 'cust
     fig = go.Figure()
     
     if 'revenue' in metrics:
+        # Show numeric labels on revenue points (formatted as currency)
+        try:
+            rev_text = [format_currency(v) for v in monthly_data['revenue']]
+        except Exception:
+            rev_text = [format_number(v) for v in monthly_data['revenue']]
+
         fig.add_trace(go.Scatter(
             x=monthly_data['period_str'],
             y=monthly_data['revenue'],
             name='Doanh thu',
-            mode='lines+markers',
+            mode='lines+markers+text',
+            text=rev_text,
+            textposition='top center',
+            textfont=dict(size=10, color='#FFFFFF'),
             line=dict(color='#636EFA', width=2),
             yaxis='y1'
         ))
     
     if 'customers' in metrics:
+        # Show numeric labels for customer points (plain integer)
+        try:
+            cust_text = [format_number(v) for v in monthly_data['num_customers']]
+        except Exception:
+            cust_text = [str(int(v)) for v in monthly_data['num_customers']]
+
         fig.add_trace(go.Scatter(
             x=monthly_data['period_str'],
             y=monthly_data['num_customers'],
             name='Lượt khách',
-            mode='lines+markers',
+            mode='lines+markers+text',
+            text=cust_text,
+            textposition='top center',
+            textfont=dict(size=9, color='#00FFCC'),
             line=dict(color='#00CC96', width=2),
             yaxis='y2'
         ))
     
     if 'profit' in metrics:
+        # Show numeric labels on profit points (formatted as currency)
+        try:
+            prof_text = [format_currency(v) for v in monthly_data['gross_profit']]
+        except Exception:
+            prof_text = [format_number(v) for v in monthly_data['gross_profit']]
+
         fig.add_trace(go.Scatter(
             x=monthly_data['period_str'],
             y=monthly_data['gross_profit'],
             name='Lợi nhuận',
-            mode='lines+markers',
+            mode='lines+markers+text',
+            text=prof_text,
+            textposition='top center',
+            textfont=dict(size=9, color='#F3A6FF'),
             line=dict(color='#AB63FA', width=2),
             yaxis='y1'
         ))
@@ -1947,20 +2227,38 @@ def create_top_routes_dual_axis_chart(df_data):
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     
     # Trace 1 & 2: Revenue and Profit (Trục Y Chính - Currency)
+    # Prepare formatted text labels (with fallbacks)
+    try:
+        revenue_texts = [format_currency(v) for v in df_data['revenue']]
+    except Exception:
+        revenue_texts = [format_number(v) for v in df_data['revenue']]
+
+    try:
+        profit_texts = [format_currency(v) for v in df_data['gross_profit']]
+    except Exception:
+        profit_texts = [format_number(v) for v in df_data['gross_profit']]
+
+    cust_texts = [format_number(v) for v in df_data['num_customers']]
+
+    # Revenue bar with larger/contrasting labels
     fig.add_trace(go.Bar(
         x=df_data['route'], y=df_data['revenue'], name='Doanh thu', marker_color='#636EFA',
+        text=revenue_texts, textposition='outside', textfont=dict(size=12, color='#FFFFFF'),
         hovertemplate='DT: %{y:,.0f} ₫<extra></extra>'
     ), secondary_y=False)
-    
+
+    # Profit bar with larger/contrasting labels (use white so it shows on dark background)
     fig.add_trace(go.Bar(
         x=df_data['route'], y=df_data['gross_profit'], name='Lợi nhuận', marker_color='#FFA15A',
+        text=profit_texts, textposition='outside', textfont=dict(size=12, color='#FFFFFF'),
         hovertemplate='LN: %{y:,.0f} ₫<extra></extra>'
     ), secondary_y=False)
 
-    # Trace 3: Customers (Trục Y Phụ - Count)
+    # Customers line with slightly larger point labels
     fig.add_trace(go.Scatter(
-        x=df_data['route'], y=df_data['num_customers'], name='Lượt khách', marker=dict(color='#00CC96', size=10),
-        mode='lines+markers', line=dict(dash='dot', width=3),
+        x=df_data['route'], y=df_data['num_customers'], name='Lượt khách', marker=dict(color='#00CC96', size=8),
+        mode='lines+markers+text', line=dict(dash='dot', width=3),
+        text=cust_texts, textposition='top center', textfont=dict(size=11, color='#00CC96'),
         hovertemplate='LK: %{y:,.0f}<extra></extra>'
     ), secondary_y=True)
 
@@ -2045,15 +2343,28 @@ def create_segment_bu_comparison_chart(df_data_long, grouping_col='segment'):
 
     # Thêm Revenue
     df_rev = df_currency[df_currency['Metric'] == 'Revenue']
+    # Add formatted labels on revenue bars
+    try:
+        rev_texts = [format_currency(v) for v in df_rev['Value']]
+    except Exception:
+        rev_texts = [format_number(v) for v in df_rev['Value']]
+
     fig.add_trace(go.Bar(
         x=df_rev[grouping_col], y=df_rev['Value'], name='Doanh thu', marker_color='#636EFA',
+        text=rev_texts, textposition='outside', textfont=dict(size=8, color='#FFFFFF'),
         hovertemplate='DT: %{y:,.0f} ₫<extra></extra>'
     ), secondary_y=False)
     
     # Thêm Profit
     df_prof = df_currency[df_currency['Metric'] == 'Profit']
+    try:
+        prof_texts = [format_currency(v) for v in df_prof['Value']]
+    except Exception:
+        prof_texts = [format_number(v) for v in df_prof['Value']]
+
     fig.add_trace(go.Bar(
         x=df_prof[grouping_col], y=df_prof['Value'], name='Lợi nhuận', marker_color='#FFA15A',
+        text=prof_texts, textposition='outside', textfont=dict(size=8, color='#000000'),
         hovertemplate='LN: %{y:,.0f} ₫<extra></extra>'
     ), secondary_y=False)
 
@@ -2061,18 +2372,40 @@ def create_segment_bu_comparison_chart(df_data_long, grouping_col='segment'):
     fig.add_trace(go.Scatter(
         x=df_customers[grouping_col], y=df_customers['Value'], name='Lượt khách', 
         marker=dict(color='#00CC96', size=8),
-        mode='lines+markers', line=dict(width=3),
+        mode='lines+markers+text', line=dict(width=3),
+        text=[format_number(v) for v in df_customers['Value']], textposition='top center', textfont=dict(size=9, color='#00FFCC'),
         hovertemplate='LK: %{y:,.0f}<extra></extra>'
     ), secondary_y=True)
 
     # 5. Cấu hình Layout
+    # Improve readability when there are many groups:
+    # - rotate x labels, enable automargin, and increase bottom margin
+    # - use adaptive height based on number of groups
+    n_groups = len(groups) if groups is not None else 0
+    fig_height = max(350, int(n_groups * 45))
     fig.update_layout(
         barmode='group', # Hiển thị cột cạnh nhau để so sánh
-        height=350,
-        margin=dict(t=30, b=30, l=30, r=30),
-        legend=dict(orientation="h", y=1.1, x=0.5, xanchor='center'),
-        xaxis=dict(title=grouping_col, tickangle=0),
-        yaxis=dict(title="Tiền tệ (₫)", side='left', showgrid=True),
+        height=fig_height,
+        margin=dict(t=30, b=max(80, int(n_groups * 8)), l=40, r=40),
+        legend=dict(orientation="h", y=1.05, x=0.5, xanchor='center'),
+    xaxis=dict(title=grouping_col, tickangle=90, automargin=True, tickfont=dict(size=10)),
+        yaxis=dict(title="Tiền tệ (₫)", side='left', showgrid=True, tickformat='.2s'),
         yaxis2=dict(title="Lượt khách", side='right', showgrid=False)
     )
+    # Reduce text clutter: let Plotly decide whether to put bar text inside/outside
+    # and keep bar label font small. Also reduce marker label size for customers.
+    # (This helps prevent numeric labels from overlapping when bars are very tall.)
+    for t in fig.data:
+        # For Bar traces, use 'auto' textposition so labels move inside/outside as needed
+        if isinstance(t, go.Bar):
+            t.textposition = 'auto'
+            t.textfont = dict(size=8, color='#000000')
+        # For Scatter (customers), keep smaller marker and smaller text to avoid overlap
+        if isinstance(t, go.Scatter):
+            # remove inline text to reduce overlap; rely on hover for exact numbers
+            try:
+                t.mode = 'lines+markers'
+                t.marker = dict(color=t.marker.color if hasattr(t.marker, 'color') else '#00CC96', size=6)
+            except Exception:
+                pass
     return fig
