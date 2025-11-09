@@ -89,7 +89,7 @@ st.markdown("""
 
 # Nhập nguồn dữ liệu (đặt trước khi load dữ liệu)
 # Mặc định sử dụng Google Sheet với link cố định
-DEFAULT_DATANET_URL = 'https://docs.google.com/spreadsheets/d/1CljNuZ4WVNXGL7J111ZhVT9FPCVZDQsB6L5UHMgYeAc/edit?gid=1626526907#gid=1626526907'
+DEFAULT_DATANET_URL = 'https://docs.google.com/spreadsheets/d/1CljNuZ4WVNXGL7J111ZhVT9FPCVZDQsB6L5UHMgYeAc/edit?gid=1385215662#gid=1385215662'
 DEFAULT_PLAN_URL = 'https://docs.google.com/spreadsheets/d/1CljNuZ4WVNXGL7J111ZhVT9FPCVZDQsB6L5UHMgYeAc/edit?gid=322447784#gid=322447784'
 
 with st.sidebar:
