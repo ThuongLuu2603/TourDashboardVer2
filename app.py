@@ -581,36 +581,11 @@ with tab1:
     # Row 2: Marketing/Sales Cost and Trend Chart
     st.markdown("")
     col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        # Calculate marketing metrics
-        marketing_metrics = calculate_marketing_metrics(filtered_tours, start_date, end_date)
-        st.metric(
-            label="💳 CHI PHÍ MARKETING/BÁN HÀNG",
-            value=f"{format_percentage(marketing_metrics['opex_ratio'])}",
-            delta=f"{format_currency(marketing_metrics['total_opex'])} OPEX"
-        )
-        with st.expander("Chi tiết"):
-            st.write(f"**Chi phí Marketing:** {format_currency(marketing_metrics['total_marketing'])}")
-            st.write(f"**Chi phí Bán hàng:** {format_currency(marketing_metrics['total_sales'])}")
-            st.write(f"**Tổng OPEX:** {format_currency(marketing_metrics['total_opex'])}")
-            st.write(f"**Doanh thu:** {format_currency(marketing_metrics['total_revenue'])}")
-            st.write(f"**Tỷ lệ OPEX/DT:** {format_percentage(marketing_metrics['opex_ratio'])}")
-    
-    with col2:
-        st.markdown("<div style='font-size: 14px; font-weight: bold; margin-bottom: 10px;'>📊 Xu hướng Doanh thu / Lượt khách / Lãi Gộp theo thời gian</div>", unsafe_allow_html=True)
-        fig_trend = create_trend_chart(filtered_tours, start_date, end_date, metrics=['revenue', 'customers', 'profit'])
-        st.plotly_chart(fig_trend, use_container_width=True)
-
-    # Row 3 (MỚI): Doanh thu trung bình/Khách (AOV)
-    st.markdown("")
-    col1, col2 = st.columns([1, 2]) # Vẫn dùng tỉ lệ 1:2 để căn chỉnh
-
     # Tính toán AOV
     aov = kpis['actual_revenue'] / kpis['actual_customers'] if kpis['actual_customers'] > 0 else 0
     ly_aov = kpis['ly_revenue'] / kpis['ly_customers'] if kpis['ly_customers'] > 0 else 0
-    aov_growth = get_growth_rate(aov, ly_aov)
-
+    aov_growth = get_growth_rate(aov, ly_aov)    
+    
     with col1:
         st.metric(
             label="💵 DOANH THU TB/KHÁCH (AOV)",
@@ -622,10 +597,12 @@ with tab1:
             st.write(f"**Tăng trưởng AOV:** {format_percentage(aov_growth)}")
             st.write(f"**Doanh thu Tổng:** {format_currency(kpis['actual_revenue'])}")
             st.write(f"**Lượt khách Tổng:** {format_number(kpis['actual_customers'])}")
-
-    # Col 2 (trống) để căn chỉnh
+    
     with col2:
-        st.empty() 
+        st.markdown("<div style='font-size: 14px; font-weight: bold; margin-bottom: 10px;'>📊 Xu hướng Doanh thu / Lượt khách / Lãi Gộp theo thời gian</div>", unsafe_allow_html=True)
+        fig_trend = create_trend_chart(filtered_tours, start_date, end_date, metrics=['revenue', 'customers', 'profit'])
+        st.plotly_chart(fig_trend, use_container_width=True)
+
     st.markdown("---")
     
     
@@ -1241,7 +1218,7 @@ with tab2:
 # TAB 3: ĐỐI TÁC (TÁI CẤU TRÚC HOÀN CHỈNH)
 # ============================================================
 with tab3:
-    st.title("🤝 Dashboard Quản lý Dịch vụ và Đối tác")
+    st.title("🤝 Dashboard Quản lý Dịch vụ và Đối tác (Pending)")
     
     # Lấy dữ liệu đã lọc theo Đối tác/Dịch vụ
     # Giả định các hàm tính toán đã được định nghĩa trong utils.py hoặc được import
