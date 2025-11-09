@@ -116,7 +116,7 @@ with st.sidebar:
         plan_sheet_url = st.text_input(
             "Link Google Sheet (Kế hoạch)",
             value=st.session_state.get('plan_sheet_url', DEFAULT_PLAN_URL),
-            help="Link Google Sheet chứa Kế hoạch. Header ở hàng 2, các đơn vị bắt đầu từ cột E, mỗi đơn vị chiếm 4 cột (Khách, Doanh thu, Lợi nhuận)."
+            help="Link Google Sheet chứa Kế hoạch. Header ở hàng 2, các đơn vị bắt đầu từ cột E, mỗi đơn vị chiếm 4 cột (Khách, Doanh thu, Lãi Gộp)."
         )
         # Lưu lại vào session_state để sử dụng khi load
         st.session_state['use_sheet'] = use_sheet
@@ -462,7 +462,7 @@ with tab1:
         profit_completion = calculate_completion_rate(kpis['actual_gross_profit'], kpis['planned_gross_profit'])
         fig_profit = create_gauge_chart(
             profit_completion,
-            "Đạt KH Lợi nhuận",
+            "Đạt KH Lãi Gộp",
             unit_breakdown=profit_breakdown,
             actual_value=kpis.get('actual_gross_profit'),
             planned_value=kpis.get('planned_gross_profit')
@@ -553,7 +553,7 @@ with tab1:
     
     with col2:
         st.metric(
-            label="💵 LỢI NHUẬN GỘP",
+            label="💵 Lãi Gộp",
             value=format_currency(kpis['actual_gross_profit']),
             delta=f"{format_percentage(kpis['profit_growth'])} so với cùng kỳ"
         )
@@ -598,7 +598,7 @@ with tab1:
             st.write(f"**Tỷ lệ OPEX/DT:** {format_percentage(marketing_metrics['opex_ratio'])}")
     
     with col2:
-        st.markdown("<div style='font-size: 14px; font-weight: bold; margin-bottom: 10px;'>📊 Xu hướng Doanh thu / Lượt khách / Lợi nhuận theo thời gian</div>", unsafe_allow_html=True)
+        st.markdown("<div style='font-size: 14px; font-weight: bold; margin-bottom: 10px;'>📊 Xu hướng Doanh thu / Lượt khách / Lãi Gộp theo thời gian</div>", unsafe_allow_html=True)
         fig_trend = create_trend_chart(filtered_tours, start_date, end_date, metrics=['revenue', 'customers', 'profit'])
         st.plotly_chart(fig_trend, use_container_width=True)
 
@@ -790,7 +790,7 @@ with tab1:
             st.plotly_chart(fig)
     
     with col2:
-        st.markdown("#### Tỷ suất Lợi nhuận Gộp theo Đơn vị")
+        st.markdown("#### Tỷ suất Lãi Gộp theo Đơn vị")
         if not unit_table.empty:
             unit_margin = unit_table[['business_unit', 'profit_margin']].copy()
             # Sort by profit margin descending so highest margin units appear left-most
@@ -813,7 +813,7 @@ with tab1:
             ))
             fig2.update_layout(
                 xaxis_title='Đơn vị',
-                yaxis_title='Tỷ suất lợi nhuận (%)',
+                yaxis_title='Tỷ suất Lãi Gộp (%)',
                 height=max(400, int(len(unit_margin) * 25)),
                 margin=dict(l=80, r=80, t=10, b=140),
                 xaxis=dict(tickangle=-45, tickfont=dict(size=10), categoryorder='array', categoryarray=unit_margin['business_unit'])
@@ -833,7 +833,7 @@ with tab1:
         display_df['gross_profit'] = display_df['gross_profit'].apply(format_currency)
         display_df['profit_margin'] = display_df['profit_margin'].apply(lambda x: f"{x:.1f}%")
         display_df['avg_revenue_per_customer'] = display_df['avg_revenue_per_customer'].apply(format_currency)
-        display_df.columns = ['Đơn vị', 'Doanh thu', 'Lượt khách', 'Lợi nhuận gộp', 'Tỷ suất LN (%)', 'DT TB/khách']
+        display_df.columns = ['Đơn vị', 'Doanh thu', 'Lượt khách', 'Lãi Gộp', 'Tỷ suất LN (%)', 'DT TB/khách']
         st.dataframe(display_df, use_container_width=True, hide_index=True)
     
 # ========== VÙNG 5: THÔNG TIN TUYẾN TOUR ==========
@@ -874,7 +874,7 @@ with tab1:
         df_merged_top10 = pd.DataFrame()
 
     # --- HÀNG 1: BIỂU ĐỒ 1 - SO SÁNH TUYỆT ĐỐI (TRỤC KÉP) ---
-    st.markdown("#### Hàng 1: So sánh Giá trị Tuyệt đối (Doanh thu, Lượt khách, Lợi nhuận)")
+    st.markdown("#### Hàng 1: So sánh Giá trị Tuyệt đối (Doanh thu, Lượt khách, Lãi Gộp)")
     col1, col2 = st.columns(2)
 
     with col1:
@@ -1051,14 +1051,14 @@ with tab2:
         st.plotly_chart(fig_cust_stacked, use_container_width=True, key="tab2_cust_stacked")
     
     with col3:
-        st.markdown("##### Lợi nhuận (Phân bổ BU)")
+        st.markdown("##### Lãi Gộp (Phân bổ BU)")
         fig_profit_stacked = create_stacked_route_chart(filtered_tours, metric='gross_profit', title='', top_n=top_n)
         st.plotly_chart(fig_profit_stacked, use_container_width=True, key="tab2_profit_stacked")
     
     st.markdown("")
 
     # Row 2: Profit margin with color coding
-    st.markdown("#### Tỷ suất Lợi nhuận theo Tuyến")
+    st.markdown("#### Tỷ suất Lãi Gộp theo Tuyến")
     if not route_table.empty:
         top_10_margin = route_table.nlargest(top_n, 'profit_margin')[['route', 'profit_margin']]
         fig = create_profit_margin_chart_with_color(top_10_margin, 'profit_margin', 'route', '')
@@ -1081,7 +1081,7 @@ with tab2:
         display_df['revenue_completion'] = display_df['revenue_completion'].apply(lambda x: f"{x:.1f}%")
         display_df['occupancy_rate'] = display_df['occupancy_rate'].apply(lambda x: f"{x:.1f}%")
         display_df['cancel_rate'] = display_df['cancel_rate'].apply(lambda x: f"{x:.1f}%")
-        display_df.columns = ['Tuyến', 'Doanh thu', 'Lượt khách', 'Lợi nhuận gộp', 
+        display_df.columns = ['Tuyến', 'Doanh thu', 'Lượt khách', 'Lãi Gộp', 
                       'Tỷ suất LN (%)', 'Tiến độ KH (%)', 'Tỷ lệ Lấp đầy (%)', 'Tỷ lệ Hủy/Đổi (%)']
 
         st.dataframe(display_df, use_container_width=True, hide_index=True)
@@ -1437,8 +1437,8 @@ with tab3:
             fig_scatter.update_layout(height=400, showlegend=False, margin=dict(t=30))
             st.plotly_chart(fig_scatter, use_container_width=True)
 
-    # Bảng chi tiết Doanh thu/Chi phí/Lợi nhuận
-    st.markdown("#### Bảng Chi tiết Hợp đồng và Tỷ suất Lợi nhuận")
+    # Bảng chi tiết Doanh thu/Chi phí/Lãi Gộp
+    st.markdown("#### Bảng Chi tiết Hợp đồng và Tỷ suất Lãi Gộp")
     
     # Lấy bảng hợp đồng chi tiết
     df_partner_revenue_detail = partner_filtered_data.groupby(['partner', 'service_type', 'payment_status', 'contract_status']).agg(

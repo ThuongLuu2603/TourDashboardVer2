@@ -1462,7 +1462,7 @@ def create_trend_chart(tours_df, start_date, end_date, metrics=['revenue', 'cust
         fig.add_trace(go.Scatter(
             x=monthly_data['period_str'],
             y=monthly_data['gross_profit'],
-            name='Lợi nhuận',
+            name='Lãi Gộp',
             mode='lines+markers+text',
             text=prof_text,
             textposition='top center',
@@ -1473,7 +1473,7 @@ def create_trend_chart(tours_df, start_date, end_date, metrics=['revenue', 'cust
     
     fig.update_layout(
         xaxis_title=x_title,
-        yaxis=dict(title="Doanh thu / Lợi nhuận (₫)", side='left'),
+        yaxis=dict(title="Doanh thu / Lãi Gộp (₫)", side='left'),
         yaxis2=dict(title="Lượt khách", overlaying='y', side='right'),
         height=250,
         showlegend=True,
@@ -1632,7 +1632,7 @@ def create_profit_margin_chart_with_color(data, x_col, y_col, title):
     
     fig.update_layout(
         title=title,
-        xaxis_title="Tỷ suất lợi nhuận (%)",
+        xaxis_title="Tỷ suất Lãi Gộp (%)",
         yaxis_title="",
         height=max(300, len(data) * 30),
         margin=dict(l=30, r=100, t=50, b=30),
@@ -2276,7 +2276,7 @@ def create_stacked_route_chart(tours_df, metric='revenue', title='', top_n=10):
     else: # gross_profit
         y_col = 'gross_profit'
         hover_format = '₫'
-        yaxis_title = 'Lợi nhuận gộp (₫)'
+        yaxis_title = 'Lãi Gộp (₫)'
 
     # Tạo biểu đồ Cột xếp chồng (Dùng df_grouped)
     fig = px.bar(
@@ -2337,7 +2337,7 @@ def create_top_routes_dual_axis_chart(df_data):
 
     # Profit bar with larger/contrasting labels (use white so it shows on dark background)
     fig.add_trace(go.Bar(
-        x=df_data['route'], y=df_data['gross_profit'], name='Lợi nhuận', marker_color='#FFA15A',
+        x=df_data['route'], y=df_data['gross_profit'], name='Lãi Gộp', marker_color='#FFA15A',
         text=profit_texts, textposition='outside', textfont=dict(size=12, color='#FFFFFF'),
         hovertemplate='LN: %{y:,.0f} ₫<extra></extra>'
     ), secondary_y=False)
@@ -2358,7 +2358,7 @@ def create_top_routes_dual_axis_chart(df_data):
         margin=dict(t=50, b=50, l=50, r=50),
         legend=dict(orientation="h", y=1.1, x=0.5, xanchor='center'),
         xaxis=dict(title="Tuyến Tour", tickangle=45),
-        yaxis=dict(title="Doanh thu / Lợi nhuận (₫)", side='left', showgrid=True),
+        yaxis=dict(title="Doanh thu / Lãi Gộp (₫)", side='left', showgrid=True),
         yaxis2=dict(title="Lượt khách", side='right', showgrid=False)
     )
     return fig
@@ -2376,7 +2376,7 @@ def create_top_routes_ratio_stacked(df_data):
     df_long['Metric'] = df_long['Metric'].replace({
         'revenue': 'Doanh thu',
         'num_customers': 'Lượt khách',
-        'gross_profit': 'Lợi nhuận'
+        'gross_profit': 'Lãi Gộp'
     })
 
     # 2. Tính Tỷ trọng đóng góp của mỗi Route cho tổng thể (Metric)
@@ -2451,7 +2451,7 @@ def create_segment_bu_comparison_chart(df_data_long, grouping_col='segment'):
         prof_texts = [format_number(v) for v in df_prof['Value']]
 
     fig.add_trace(go.Bar(
-        x=df_prof[grouping_col], y=df_prof['Value'], name='Lợi nhuận', marker_color='#FFA15A',
+        x=df_prof[grouping_col], y=df_prof['Value'], name='Lãi Gộp', marker_color='#FFA15A',
         text=prof_texts, textposition='outside', textfont=dict(size=8, color='#000000'),
         hovertemplate='LN: %{y:,.0f} ₫<extra></extra>'
     ), secondary_y=False)
