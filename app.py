@@ -507,6 +507,22 @@ tab1, tab2, tab3 = st.tabs([
 # TAB 1: TỔNG QUAN (5 VÙNG THEO SPEC)
 # ============================================================
 with tab1:
+    # If sheet wasn't successfully loaded, show banner + retry and stop further rendering for Tab 1
+    if not used_sheet:
+        st.warning("Google Sheet chưa được đọc thành công — Tab 1 đang bị khóa chờ dữ liệu từ Sheet.")
+        col_retry1, col_retry2 = st.columns([1, 5])
+        with col_retry1:
+            if st.button("🔄 Thử lại (Tab 1)"):
+                try:
+                    load_data_cached.clear()
+                except Exception:
+                    pass
+                st.session_state['data_loaded'] = False
+                st.rerun()
+        with col_retry2:
+            st.info("Vui lòng kiểm tra URL/Quyền truy cập của Google Sheet rồi nhấn 'Thử lại'.")
+        # Prevent rendering the rest of Tab 1 when sheet isn't available
+        st.stop()
     # ========== VÙNG 1: TỐC ĐỘ ĐẠT KẾ HOẠCH ==========
     st.markdown("### Vùng 1: Tốc độ đạt Kế hoạch")
     
@@ -988,6 +1004,22 @@ with tab1:
 # TAB 2: CHI TIẾT (3 VÙNG THEO SPEC)
 # ============================================================
 with tab2:
+    # If sheet wasn't successfully loaded, show banner + retry and stop further rendering for Tab 2
+    if not used_sheet:
+        st.warning("Google Sheet chưa được đọc thành công — Tab 2 đang bị khóa chờ dữ liệu từ Sheet.")
+        col_retry1, col_retry2 = st.columns([1, 5])
+        with col_retry1:
+            if st.button("🔄 Thử lại (Tab 2)"):
+                try:
+                    load_data_cached.clear()
+                except Exception:
+                    pass
+                st.session_state['data_loaded'] = False
+                st.rerun()
+        with col_retry2:
+            st.info("Vui lòng kiểm tra URL/Quyền truy cập của Google Sheet rồi nhấn 'Thử lại'.")
+        # Prevent rendering the rest of Tab 2 when sheet isn't available
+        st.stop()
     route_table = get_route_detailed_table(filtered_tours, filtered_plans, start_date, end_date)
     top_revenue = cached_get_top_routes(filtered_tours, int(top_n), 'revenue')
     top_customers = cached_get_top_routes(filtered_tours, int(top_n), 'customers')
