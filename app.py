@@ -13,6 +13,54 @@ import plotly.express as px
 # Cần import make_subplots ở đây để dùng trong app.py nếu cần cho chart phức tạp
 from plotly.subplots import make_subplots 
 from admin_ui import render_admin_ui
+import time
+
+
+# Cached loader: fetch + parse Google Sheet (or generate) once per TTL to speed up Streamlit Cloud cold starts
+@st.cache_data(ttl=3600)
+def load_data_cached(spreadsheet_url, plan_spreadsheet_url):
+    t0 = time.time()
+    result = load_or_generate_data(spreadsheet_url, plan_spreadsheet_url=plan_spreadsheet_url)
+    elapsed = time.time() - t0
+    # normalize return to 4-tuple (tours_df, plans_df, historical_df, meta)
+    if isinstance(result, tuple) and len(result) == 4:
+        tours_df, plans_df, historical_df, data_meta = result
+    else:
+        tours_df, plans_df, historical_df = result
+        data_meta = {'used_excel': False, 'processed_files': [], 'parsed_rows': 0}
+    try:
+        if isinstance(data_meta, dict):
+            data_meta['loader_elapsed_sec'] = elapsed
+    except Exception:
+        pass
+    return tours_df, plans_df, historical_df, data_meta
+
+
+# --- Cached wrappers for heavy aggregations (lazy and shared across reruns) ---
+@st.cache_data(ttl=600)
+def cached_calculate_kpis(tours_df, plans_df, start_date, end_date, plans_daily_df, plans_weekly_df, period_type, selected_segment):
+    # Convert minimal inputs to allow hashing: Streamlit will hash DataFrames by content
+    return calculate_kpis(tours_df, plans_df, start_date, end_date, plans_daily_df=plans_daily_df, plans_weekly_df=plans_weekly_df, period_type=period_type, selected_segment=selected_segment)
+
+
+@st.cache_data(ttl=600)
+def cached_get_top_routes(tours_df, n, metric):
+    return get_top_routes(tours_df, n=n, metric=metric)
+
+
+@st.cache_data(ttl=600)
+def cached_get_route_detailed_table(tours_df, plans_df, start_date, end_date):
+    return get_route_detailed_table(tours_df, plans_df, start_date, end_date)
+
+
+@st.cache_data(ttl=600)
+def cached_calculate_operational_metrics(tours_df):
+    return calculate_operational_metrics(tours_df)
+
+
+@st.cache_data(ttl=600)
+def cached_calculate_booking_metrics(tours_df, start_date, end_date):
+    return calculate_booking_metrics(tours_df, start_date, end_date)
 
 # Import custom modules
 from data_generator import load_or_generate_data
@@ -89,8 +137,9 @@ st.markdown("""
 
 # Nhập nguồn dữ liệu (đặt trước khi load dữ liệu)
 # Mặc định sử dụng Google Sheet với link cố định
-DEFAULT_DATANET_URL = 'https://docs.google.com/spreadsheets/d/1CljNuZ4WVNXGL7J111ZhVT9FPCVZDQsB6L5UHMgYeAc/edit?gid=29056776#gid=29056776'
+
 DEFAULT_PLAN_URL = 'https://docs.google.com/spreadsheets/d/1CljNuZ4WVNXGL7J111ZhVT9FPCVZDQsB6L5UHMgYeAc/edit?gid=322447784#gid=322447784'
+DEFAULT_DATANET_URL = 'https://docs.google.com/spreadsheets/d/1CljNuZ4WVNXGL7J111ZhVT9FPCVZDQsB6L5UHMgYeAc/edit?gid=29056776#gid=29056776'
 
 with st.sidebar:
     st.markdown("---")
@@ -131,33 +180,26 @@ with st.sidebar:
 # Initialize session state for data
 # Load data when not already loaded or when explicitly requested (data_loaded flag False)
 if not st.session_state.get('data_loaded', False):
-    with st.spinner('Đang tải dữ liệu...'):
-        # load_or_generate_data now returns (tours_df, plans_df, historical_df, meta)
-        # If the user checked "Dùng Google Sheet" we will load tours from the sheet.
+    # Use module-level cached loader (defined above) to fetch data
+    with st.spinner('Đang tải dữ liệu (tối ưu hóa cache)...'):
         spreadsheet_url = st.session_state.get('sheet_url') if st.session_state.get('use_sheet') else None
-        # IMPORTANT: plan sheet may be provided independently — always pass it to the loader
         plan_sheet_url = st.session_state.get('plan_sheet_url') if st.session_state.get('plan_sheet_url') else None
-        # Pass both the data sheet and optional plan sheet to the loader
-        result = load_or_generate_data(spreadsheet_url, plan_spreadsheet_url=plan_sheet_url)
-        # Support both old and new signatures for safety
-        if isinstance(result, tuple) and len(result) == 4:
-            tours_df, plans_df, historical_df, data_meta = result
-        else:
-            tours_df, plans_df, historical_df = result
-            data_meta = {'used_excel': False, 'processed_files': [], 'parsed_rows': 0}
+        tours_df, plans_df, historical_df, data_meta = load_data_cached(spreadsheet_url, plan_sheet_url)
 
         # Save loaded data into session state
         st.session_state['tours_df'] = tours_df
         st.session_state['plans_df'] = plans_df
-        # If loader provided daily/weekly expanded plans in meta, save them to session state
         st.session_state['plans_daily_df'] = data_meta.get('plans_daily_df') if isinstance(data_meta, dict) else None
         st.session_state['plans_weekly_df'] = data_meta.get('plans_weekly_df') if isinstance(data_meta, dict) else None
         st.session_state['historical_df'] = historical_df
         st.session_state['data_meta'] = data_meta
         st.session_state['data_loaded'] = True
 
-    # Show a banner if data was loaded from external source
+    # Show a banner including load time if available
     meta = st.session_state.get('data_meta', {})
+    loader_time = meta.get('loader_elapsed_sec') if isinstance(meta, dict) else None
+    if loader_time is not None:
+        st.sidebar.info(f"Dữ liệu được tải trong {loader_time:.1f}s (cached)")
     # Show banner if tours or plan sheets were used / parsed
     if meta.get('used_excel') or meta.get('used_sheet') or meta.get('parsed_plan_rows', 0) > 0:
         files = st.session_state['data_meta'].get('processed_files', [])
@@ -172,6 +214,12 @@ if not st.session_state.get('data_loaded', False):
 tours_df = st.session_state.tours_df
 plans_df = st.session_state.plans_df
 historical_df = st.session_state.historical_df
+# Determine whether data came from Google Sheet (do not allow fallback generator for Tab1/Tab2)
+data_meta = st.session_state.get('data_meta', {}) if isinstance(st.session_state.get('data_meta', {}), dict) else {}
+used_sheet = bool(data_meta.get('used_sheet', False))
+if not used_sheet:
+    # Inform user that sheet was not available and Tab1/Tab2 will be empty until sheet is available
+    st.sidebar.warning("Google Sheet chưa được đọc thành công — Tab 1 và Tab 2 đang bị khóa chờ dữ liệu từ Sheet.")
 
 # Dashboard Title
 st.title("📊 VIETRAVEL - DASHBOARD KINH DOANH TOUR")
@@ -330,13 +378,34 @@ with st.sidebar:
     
     # Refresh data button
     if st.button("🔄 Làm mới dữ liệu", width='stretch'):
+        # Clear cached loader so next load fetches fresh data
+        try:
+            load_data_cached.clear()
+        except Exception:
+            pass
         st.session_state.data_loaded = False
         st.rerun()
 
 # Filter data based on selections (dimensional filters only, NOT date)
 # Date filtering will be done inside calculate_kpis to preserve YoY data
-tours_filtered_dimensional = tours_df.copy()
-filtered_plans = plans_df.copy()
+# Enforce: if the loader did NOT successfully read the Google Sheet, lock Tab 1 & Tab 2
+# to use sheet-only data by replacing tour/plan frames with empty DataFrames so that
+# downstream charts/tables show no data. This prevents fallback generated data from appearing.
+data_meta = st.session_state.get('data_meta', {})
+used_sheet = bool(data_meta.get('used_sheet', False))
+if used_sheet:
+    tours_filtered_dimensional = tours_df.copy()
+    filtered_plans = plans_df.copy()
+else:
+    # create empty frames with same columns where possible to avoid KeyErrors later
+    try:
+        tours_filtered_dimensional = pd.DataFrame(columns=tours_df.columns)
+    except Exception:
+        tours_filtered_dimensional = pd.DataFrame()
+    try:
+        filtered_plans = pd.DataFrame(columns=plans_df.columns)
+    except Exception:
+        filtered_plans = pd.DataFrame()
 
 if selected_unit != "Tất cả":
     tours_filtered_dimensional = tours_filtered_dimensional[tours_filtered_dimensional['business_unit'] == selected_unit]
@@ -377,15 +446,15 @@ if selected_service != "Tất cả":
 
 # Calculate KPIs using dimensionally filtered data (calculate_kpis will handle date filtering)
 # Pass daily/weekly expanded plans from session_state when available so KPIs use correct granularity
-kpis = calculate_kpis(
+kpis = cached_calculate_kpis(
     tours_filtered_dimensional,
     filtered_plans,
     start_date,
     end_date,
-    plans_daily_df=st.session_state.get('plans_daily_df'),
-    plans_weekly_df=st.session_state.get('plans_weekly_df'),
-    period_type=date_option,
-    selected_segment=selected_segment
+    st.session_state.get('plans_daily_df'),
+    st.session_state.get('plans_weekly_df'),
+    date_option,
+    selected_segment
 )
 
 
@@ -393,7 +462,8 @@ kpis = calculate_kpis(
 filtered_tours = filter_data_by_date(tours_filtered_dimensional, start_date, end_date)
 
 # TÍNH TOÁN BOOKING METRICS CHO TAB 2 (ĐÃ DI CHUYỂN)
-booking_metrics = calculate_booking_metrics(tours_df, start_date, end_date)
+# Use the dimensional tours frame so booking metrics respect the sheet-only lock above
+booking_metrics = cached_calculate_booking_metrics(tours_filtered_dimensional, start_date, end_date)
 
 
 if 'show_admin_ui' not in st.session_state:
@@ -817,9 +887,9 @@ with tab1:
     st.markdown("### Vùng 5: Thông tin tuyến tour")
 
     # Chuẩn bị dữ liệu cho cả 3 chỉ số
-    top_revenue = get_top_routes(filtered_tours, n=10, metric='revenue')
-    top_customers = get_top_routes(filtered_tours, n=10, metric='customers')
-    top_profit = get_top_routes(filtered_tours, n=10, metric='profit')
+    top_revenue = cached_get_top_routes(filtered_tours, 10, 'revenue')
+    top_customers = cached_get_top_routes(filtered_tours, 10, 'customers')
+    top_profit = cached_get_top_routes(filtered_tours, 10, 'profit')
 
     # Hợp nhất dữ liệu Top 10 vào 1 DataFrame duy nhất để so sánh
     # Đảm bảo kiểu dữ liệu nhất quán cho cột route và loại bỏ NaN
@@ -919,9 +989,9 @@ with tab1:
 # ============================================================
 with tab2:
     route_table = get_route_detailed_table(filtered_tours, filtered_plans, start_date, end_date)
-    top_revenue = get_top_routes(filtered_tours, n=top_n, metric='revenue')
-    top_customers = get_top_routes(filtered_tours, n=top_n, metric='customers')
-    top_profit = get_top_routes(filtered_tours, n=top_n, metric='profit')
+    top_revenue = cached_get_top_routes(filtered_tours, int(top_n), 'revenue')
+    top_customers = cached_get_top_routes(filtered_tours, int(top_n), 'customers')
+    top_profit = cached_get_top_routes(filtered_tours, int(top_n), 'profit')
 # ========== VÙNG 1: TÓM TẮT HIỆU SUẤT BOOKING (ĐÃ THÊM KPI VÀ TRENDS) ==========
     st.markdown("### Vùng 1: Tóm tắt Hiệu suất Booking")
     
@@ -971,7 +1041,7 @@ with tab2:
     
     with col2:
         # Xu hướng tỷ lệ booking thành công (Line Chart)
-        fig_success_trend = create_ratio_trend_chart(tours_df, start_date, end_date, 
+        fig_success_trend = create_ratio_trend_chart(tours_filtered_dimensional, start_date, end_date, 
                                                      metric='success_rate', 
                                                      title='Xu hướng Tỷ lệ Booking Thành công (Theo ngày/tuần)')
         st.plotly_chart(fig_success_trend, use_container_width=True)
@@ -996,9 +1066,9 @@ with tab2:
         
     with col2:
         # Xu hướng tỷ lệ khách hàng hủy tour (Line Chart)
-        fig_cancel_trend_ratio = create_ratio_trend_chart(tours_df, start_date, end_date, 
-                                                           metric='cancellation_rate', 
-                                                           title='Xu hướng Tỷ lệ Khách Hủy/Đổi (Theo ngày/tuần)')
+        fig_cancel_trend_ratio = create_ratio_trend_chart(tours_filtered_dimensional, start_date, end_date, 
+                               metric='cancellation_rate', 
+                               title='Xu hướng Tỷ lệ Khách Hủy/Đổi (Theo ngày/tuần)')
         st.plotly_chart(fig_cancel_trend_ratio, use_container_width=True)
 
     st.markdown("---")
@@ -1007,11 +1077,11 @@ with tab2:
     # ========== VÙNG 2: THEO TUYẾN ==========
     st.markdown("### Vùng 2: Phân tích theo Tuyến")
     
-    # Get route data
-    route_table = get_route_detailed_table(filtered_tours, filtered_plans, start_date, end_date)
-    top_revenue = get_top_routes(filtered_tours, n=top_n, metric='revenue')
-    top_customers = get_top_routes(filtered_tours, n=top_n, metric='customers')
-    top_profit = get_top_routes(filtered_tours, n=top_n, metric='profit')
+    # Get route data (cached)
+    route_table = cached_get_route_detailed_table(filtered_tours, filtered_plans, start_date, end_date)
+    top_revenue = cached_get_top_routes(filtered_tours, int(top_n), 'revenue')
+    top_customers = cached_get_top_routes(filtered_tours, int(top_n), 'customers')
+    top_profit = cached_get_top_routes(filtered_tours, int(top_n), 'profit')
     
     # Row 1: Top tuyến Tour charts
     st.markdown("#### Top Tuyến Tour")
@@ -1188,7 +1258,7 @@ with tab2:
     with col2:
         st.markdown("##### Xu hướng Khách hàng hủy/đổi tour")
         # Xu hướng khách hàng hủy tour (Line Chart)
-        fig_cancel_trend = create_cancellation_trend_chart(tours_df, start_date, end_date)
+        fig_cancel_trend = create_cancellation_trend_chart(filtered_tours, start_date, end_date)
         st.plotly_chart(fig_cancel_trend, use_container_width=True)
 
     # Hàng 2: 2 Biểu đồ Tỷ trọng (Age, Nationality)
