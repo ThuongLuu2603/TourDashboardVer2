@@ -89,7 +89,7 @@ st.markdown("""
 
 # Nhập nguồn dữ liệu (đặt trước khi load dữ liệu)
 # Mặc định sử dụng Google Sheet với link cố định
-DEFAULT_DATANET_URL = 'https://docs.google.com/spreadsheets/d/1CljNuZ4WVNXGL7J111ZhVT9FPCVZDQsB6L5UHMgYeAc/edit?gid=1385215662#gid=1385215662'
+DEFAULT_DATANET_URL = 'https://docs.google.com/spreadsheets/d/1CljNuZ4WVNXGL7J111ZhVT9FPCVZDQsB6L5UHMgYeAc/edit?gid=1626526907#gid=1626526907'
 DEFAULT_PLAN_URL = 'https://docs.google.com/spreadsheets/d/1CljNuZ4WVNXGL7J111ZhVT9FPCVZDQsB6L5UHMgYeAc/edit?gid=322447784#gid=322447784'
 
 with st.sidebar:
@@ -299,7 +299,23 @@ with st.sidebar:
     
     # Top N selector
     st.subheader("Thiết lập hiển thị")
-    top_n = st.slider("Top N tuyến tour", min_value=5, max_value=15, value=10)
+    # Determine number of distinct routes (cột P / 'route') in the file and set slider maximum accordingly
+    if 'route' in tours_df.columns:
+        try:
+            num_routes = int(tours_df['route'].dropna().nunique())
+        except Exception:
+            num_routes = 15
+    else:
+        num_routes = 15
+
+    # Slider minimum: keep 5 where possible, but if there are fewer routes allow smaller min
+    slider_min = 5 if num_routes >= 5 else 1
+    # Slider maximum should be based on number of routes per user request
+    slider_max = num_routes if num_routes >= slider_min else slider_min
+    # Default value: 10 by default, but if there are fewer routes, default to num_routes
+    default_top_n = 15 if num_routes >= 15 else num_routes
+
+    top_n = st.slider("Top N tuyến tour", min_value=slider_min, max_value=slider_max, value=default_top_n)
     
     # Bổ sung Filter cho Tab 3
     st.markdown("---")
@@ -895,7 +911,7 @@ with tab1:
     with col1:
         fig_occ = create_gauge_chart(
             ops_metrics['avg_occupancy'],
-            "Tỷ lệ Lấp đầy BQ",
+            "Tỷ lệ Lấp đầy BQ (FIT)",
             max_value=100,
             threshold=75
         )
@@ -926,9 +942,9 @@ with tab1:
 # ============================================================
 with tab2:
     route_table = get_route_detailed_table(filtered_tours, filtered_plans, start_date, end_date)
-    top_revenue = get_top_routes(filtered_tours, n=10, metric='revenue')
-    top_customers = get_top_routes(filtered_tours, n=10, metric='customers')
-    top_profit = get_top_routes(filtered_tours, n=10, metric='profit')
+    top_revenue = get_top_routes(filtered_tours, n=top_n, metric='revenue')
+    top_customers = get_top_routes(filtered_tours, n=top_n, metric='customers')
+    top_profit = get_top_routes(filtered_tours, n=top_n, metric='profit')
 # ========== VÙNG 1: TÓM TẮT HIỆU SUẤT BOOKING (ĐÃ THÊM KPI VÀ TRENDS) ==========
     st.markdown("### Vùng 1: Tóm tắt Hiệu suất Booking")
     
@@ -947,10 +963,10 @@ with tab2:
             value=format_currency(kpis['actual_revenue'])
         )
     with col3:
-        st.markdown("##### 📈 Tỷ lệ Lấp đầy BQ")
+        st.markdown("##### 📈 Tỷ lệ Lấp đầy BQ (FIT)")
         fig_occ = create_gauge_chart(
             ops_metrics['avg_occupancy'],
-            "Tỷ lệ Lấp đầy BQ",
+            "Tỷ lệ Lấp đầy BQ (FIT)",
             max_value=100, 
             threshold=75,
             is_inverse_metric=False
@@ -1016,9 +1032,9 @@ with tab2:
     
     # Get route data
     route_table = get_route_detailed_table(filtered_tours, filtered_plans, start_date, end_date)
-    top_revenue = get_top_routes(filtered_tours, n=10, metric='revenue')
-    top_customers = get_top_routes(filtered_tours, n=10, metric='customers')
-    top_profit = get_top_routes(filtered_tours, n=10, metric='profit')
+    top_revenue = get_top_routes(filtered_tours, n=top_n, metric='revenue')
+    top_customers = get_top_routes(filtered_tours, n=top_n, metric='customers')
+    top_profit = get_top_routes(filtered_tours, n=top_n, metric='profit')
     
     # Row 1: Top tuyến Tour charts
     st.markdown("#### Top Tuyến Tour")
@@ -1026,17 +1042,17 @@ with tab2:
     
     with col1:
         st.markdown("##### Doanh thu (Phân bổ BU)")
-        fig_rev_stacked = create_stacked_route_chart(filtered_tours, metric='revenue', title='')
+        fig_rev_stacked = create_stacked_route_chart(filtered_tours, metric='revenue', title='', top_n=top_n)
         st.plotly_chart(fig_rev_stacked, use_container_width=True, key="tab2_rev_stacked")
     
     with col2:
         st.markdown("##### Lượt khách (Phân bổ BU)")
-        fig_cust_stacked = create_stacked_route_chart(filtered_tours, metric='num_customers', title='')
+        fig_cust_stacked = create_stacked_route_chart(filtered_tours, metric='num_customers', title='', top_n=top_n)
         st.plotly_chart(fig_cust_stacked, use_container_width=True, key="tab2_cust_stacked")
     
     with col3:
         st.markdown("##### Lợi nhuận (Phân bổ BU)")
-        fig_profit_stacked = create_stacked_route_chart(filtered_tours, metric='gross_profit', title='')
+        fig_profit_stacked = create_stacked_route_chart(filtered_tours, metric='gross_profit', title='', top_n=top_n)
         st.plotly_chart(fig_profit_stacked, use_container_width=True, key="tab2_profit_stacked")
     
     st.markdown("")
@@ -1044,7 +1060,7 @@ with tab2:
     # Row 2: Profit margin with color coding
     st.markdown("#### Tỷ suất Lợi nhuận theo Tuyến")
     if not route_table.empty:
-        top_10_margin = route_table.nlargest(10, 'profit_margin')[['route', 'profit_margin']]
+        top_10_margin = route_table.nlargest(top_n, 'profit_margin')[['route', 'profit_margin']]
         fig = create_profit_margin_chart_with_color(top_10_margin, 'profit_margin', 'route', '')
         st.plotly_chart(fig, use_container_width=True)
     

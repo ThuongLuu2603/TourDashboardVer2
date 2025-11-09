@@ -92,9 +92,33 @@ def filter_data_by_date(df, start_date, end_date, date_column='booking_date'):
             # Nothing to filter on, return empty frame with same columns
             return pd.DataFrame(columns=df.columns)
 
-    mask = (pd.to_datetime(df[col]) >= pd.to_datetime(start_date)) & \
-           (pd.to_datetime(df[col]) <= pd.to_datetime(end_date))
-    return df.loc[mask].copy()
+    # Parse start/end dates robustly. Try default parsing first; if no rows match,
+    # attempt parsing with dayfirst=True (Vietnam locale) as a fallback.
+    try:
+        col_dates = pd.to_datetime(df[col], errors='coerce')
+    except Exception:
+        col_dates = pd.to_datetime(df[col].astype(str), errors='coerce')
+
+    def make_mask(start_dt, end_dt):
+        return (col_dates >= pd.to_datetime(start_dt)) & (col_dates <= pd.to_datetime(end_dt))
+
+    # First attempt: parse start/end with default settings
+    try:
+        mask = make_mask(start_date, end_date)
+    except Exception:
+        mask = pd.Series([False] * len(df), index=df.index)
+
+    # If no rows selected, try parsing start/end with dayfirst=True
+    if mask.sum() == 0:
+        try:
+            start_dt = pd.to_datetime(start_date, dayfirst=True, errors='coerce')
+            end_dt = pd.to_datetime(end_date, dayfirst=True, errors='coerce')
+            if not pd.isna(start_dt) and not pd.isna(end_dt):
+                mask = (col_dates >= start_dt) & (col_dates <= end_dt)
+        except Exception:
+            pass
+
+    return df.loc[mask.fillna(False)].copy()
 
 
 def filter_confirmed_bookings(df):
@@ -115,10 +139,23 @@ def calculate_kpis(tours_df, plans_df, start_date, end_date, plans_daily_df=None
     current_data = filter_data_by_date(tours_df, start_date, end_date)
     confirmed_data = filter_confirmed_bookings(current_data)
     
-    # Calculate actual metrics
-    actual_revenue = confirmed_data['revenue'].sum()
-    actual_gross_profit = confirmed_data['gross_profit'].sum()
-    actual_customers = confirmed_data['num_customers'].sum()
+    # Calculate actual metrics.
+    # Prefer effective (post-cancellation) columns when present (revenue_effective, gross_profit_effective, num_customers_effective).
+    # This ensures KPIs reflect cancellations recorded via `cancel_count` (col U) rather than raw booked values.
+    if 'revenue_effective' in confirmed_data.columns:
+        actual_revenue = confirmed_data['revenue_effective'].sum()
+    else:
+        actual_revenue = confirmed_data['revenue'].sum()
+
+    if 'gross_profit_effective' in confirmed_data.columns:
+        actual_gross_profit = confirmed_data['gross_profit_effective'].sum()
+    else:
+        actual_gross_profit = confirmed_data['gross_profit'].sum()
+
+    if 'num_customers_effective' in confirmed_data.columns:
+        actual_customers = confirmed_data['num_customers_effective'].sum()
+    else:
+        actual_customers = confirmed_data['num_customers'].sum()
     
     # Determine plan sums according to period type selected by user
     start_dt = pd.to_datetime(start_date)
@@ -751,11 +788,17 @@ def calculate_operational_metrics(tours_df):
     """
     Calculate operational metrics
     """
-    # Average occupancy rate
+    # Average occupancy rate - ONLY for FIT segment as requested
     confirmed = filter_confirmed_bookings(tours_df)
-    total_booked = confirmed['num_customers'].sum()
-    total_capacity = confirmed['tour_capacity'].sum()
-    # Hàm này đã có bảo vệ chia cho 0
+    try:
+        fit_confirmed = confirmed[confirmed['segment'].fillna('').astype(str).str.strip().str.upper() == 'FIT']
+    except Exception:
+        # Fallback: if segmentation column missing or unexpected, treat as empty
+        fit_confirmed = pd.DataFrame(columns=confirmed.columns)
+
+    total_booked = fit_confirmed['num_customers'].sum()
+    total_capacity = fit_confirmed['tour_capacity'].sum()
+    # Protect divide-by-zero: occupancy = booked / capacity
     avg_occupancy = (total_booked / total_capacity * 100) if total_capacity > 0 else 0
     
     # Cancellation/postponement rate
@@ -2157,17 +2200,21 @@ def create_ratio_trend_chart(tours_df, start_date, end_date, metric='success_rat
 
 # Trong file utils.py (Hàm create_stacked_route_chart)
 
-def create_stacked_route_chart(tours_df, metric='revenue', title=''):
+def create_stacked_route_chart(tours_df, metric='revenue', title='', top_n=10):
     """
     Creates a stacked bar chart showing the metric total per Route, segmented by Business Unit (BU).
     """
     confirmed = filter_confirmed_bookings(tours_df)
     
-    # 1. Lấy Top 10 Routes theo Doanh thu làm cơ sở sắp xếp
-    top_10_routes = confirmed.groupby('route')['revenue'].sum().nlargest(10).index.tolist()
+    # 1. Lấy Top N Routes theo Doanh thu làm cơ sở sắp xếp
+    try:
+        top_routes = confirmed.groupby('route')['revenue'].sum().nlargest(int(top_n)).index.tolist()
+    except Exception:
+        # Fallback to all routes if grouping fails
+        top_routes = confirmed['route'].dropna().unique().tolist()
     
     # 2. NHÓM DỮ LIỆU theo Route VÀ Đơn vị Kinh doanh (BU)
-    df_grouped = confirmed[confirmed['route'].isin(top_10_routes)].groupby(
+    df_grouped = confirmed[confirmed['route'].isin(top_routes)].groupby(
         ['route', 'business_unit']
     ).agg(
         revenue=('revenue', 'sum'),
@@ -2200,7 +2247,7 @@ def create_stacked_route_chart(tours_df, metric='revenue', title=''):
         y=y_col,
         color='business_unit', # Xếp chồng theo Đơn vị Kinh doanh
         title=title,
-        category_orders={'route': top_10_routes}, # Giữ nguyên thứ tự Top 10
+        category_orders={'route': top_routes}, # Giữ nguyên thứ tự Top N
         color_discrete_sequence=px.colors.qualitative.T10
     )
     
