@@ -484,13 +484,13 @@ def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdow
         mode = "gauge+number",
         value = value,
         domain = {'x': [0, 1], 'y': [1, 1]},
-        title = {'text': title, 'font': {'size': 11}},
+        title = {'text': title, 'font': {'size': 15}},
         number = {
             'suffix': "%", 
             'font': {'size': 20}
         },
         gauge = {
-            'axis': {'range': [None, max_value], 'ticksuffix': "%", 'tickfont': {'size': 9}},
+            'axis': {'range': [None, max_value], 'ticksuffix': "%", 'tickfont': {'size': 12}},
             'bar': {'color': color},
             'steps': [
                 {'range': [0, threshold * 0.5], 'color': "#FFE5E5"},
@@ -525,7 +525,7 @@ def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdow
     # Reduce top margin so gauges sit closer to the page title
     fig.update_layout(
         height=320,
-        margin=dict(l=10, r=10, t=8, b=10),
+        margin=dict(l=10, r=10,t= 8, b=10),
         hovermode='closest'
     )
     # The invisible scatter used for hover adds default x/y axes; hide them so
@@ -567,13 +567,13 @@ def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdow
             # Keep a modest top margin and place the TH/KH annotation below the
             # chart title so it doesn't overlap. Use paper coords for stable placement.
             try:
-                fig.update_layout(margin=dict(l=10, r=10, t=20, b=10))
+                fig.update_layout(margin=dict(l=10, r=10, t=5, b=10))
             except Exception:
                 pass
 
             fig.add_annotation(
                 x=0.5,
-                y=0.78,
+                y=0.55,
                 xref='paper',
                 yref='paper',
                 xanchor='center',
@@ -581,7 +581,7 @@ def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdow
                 text=ann_text,
                 showarrow=False,
                 align='center',
-                font=dict(size=10, color='#FFFFFF'),
+                font=dict(size=12, color='#FFFFFF'),
                 bordercolor='rgba(255,255,255,0.12)',
                 borderwidth=1,
                 bgcolor='rgba(0,0,0,0.5)',
