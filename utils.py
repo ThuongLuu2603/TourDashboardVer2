@@ -2013,20 +2013,37 @@ def create_partner_trend_chart(tours_df, start_date, end_date):
 def calculate_booking_metrics(tours_df, start_date, end_date):
     """Calculates Total Booked Customers, Success Rate, and Cancellation/Change Rate."""
     period_tours = filter_data_by_date(tours_df, start_date, end_date)
-    
-    total_customers_all = period_tours['num_customers'].sum()
-    confirmed_tours = filter_confirmed_bookings(period_tours)
-    total_customers_confirmed = confirmed_tours['num_customers'].sum()
-    
-    # Successful Booking Rate (confirmed / total attempts)
-    success_rate = (total_customers_confirmed / total_customers_all * 100) if total_customers_all > 0 else 0
-    
-    # Cancellation/Change Rate (Non-confirmed / Total)
-    cancelled_changed = period_tours[period_tours['status'].isin(['Đã hủy', 'Hoãn'])]
-    total_customers_cancelled = cancelled_changed['num_customers'].sum()
-    
-    cancel_change_rate = (total_customers_cancelled / total_customers_all * 100) if total_customers_all > 0 else 0
-    
+    # Use column 'cancel_count' (cột U) as number of cancelled pax when available.
+    # Ignore negative values in num_customers (treat them as 0 for totals).
+    # Cancellation rate = sum(cancel_count) / sum(num_customers_filtered)
+    # Success rate = (sum(num_customers_filtered) - sum(cancel_count)) / sum(num_customers_filtered)
+
+    # Ensure numeric columns
+    if 'num_customers' in period_tours.columns:
+        num_cust_series = pd.to_numeric(period_tours['num_customers'], errors='coerce').fillna(0)
+        # Exclude negative values
+        num_cust_series = num_cust_series[num_cust_series > 0]
+        total_customers_all = int(num_cust_series.sum()) if not num_cust_series.empty else 0
+    else:
+        total_customers_all = 0
+
+    if 'cancel_count' in period_tours.columns:
+        cancel_series = pd.to_numeric(period_tours['cancel_count'], errors='coerce').fillna(0)
+        # Treat negative cancel_count as 0
+        cancel_series = cancel_series[cancel_series > 0]
+        total_cancelled = int(cancel_series.sum()) if not cancel_series.empty else 0
+    else:
+        # Fallback: count cancelled bookings by status if cancel_count not present
+        cancelled_changed = period_tours[period_tours['status'].isin(['Đã hủy', 'Hoãn'])]
+        total_cancelled = int(cancelled_changed['num_customers'].sum()) if not cancelled_changed.empty else 0
+
+    if total_customers_all > 0:
+        cancel_change_rate = (total_cancelled / total_customers_all) * 100
+        success_rate = ((total_customers_all - total_cancelled) / total_customers_all) * 100
+    else:
+        cancel_change_rate = 0
+        success_rate = 0
+
     return {
         'total_booked_customers': total_customers_all,
         'success_rate': success_rate,
@@ -2148,29 +2165,48 @@ def create_ratio_trend_chart(tours_df, start_date, end_date, metric='success_rat
     
     # 1. Nhóm dữ liệu theo Period và tính các thành phần cần thiết
     period_tours['period'] = pd.to_datetime(period_tours['booking_date']).dt.to_period(freq_unit)
-    
-    trend_data = period_tours.groupby('period').agg(
-        total_customers=('num_customers', 'sum'),
-        total_confirmed=('status', lambda x: (x == 'Đã xác nhận').sum()),
-        total_cancelled=('status', lambda x: (x.isin(['Đã hủy', 'Hoãn'])).sum())
-    ).reset_index()
-    
-    # 2. Tính tỷ lệ (Ratio) cho mỗi Period
+
+    # For the requested trend charts we show absolute counts (per your request):
+    # - success: number of customers with status 'Đã xác nhận' per period
+    # - cancellation: number of cancelled customers per period (use cancel_count if available, otherwise count status)
     if metric == 'success_rate':
-        trend_data['ratio'] = np.where(
-            trend_data['total_customers'] > 0,
-            (trend_data['total_confirmed'] / trend_data['total_customers']) * 100,
-            0
-        )
-        y_label = "Tỷ lệ Thành công (%)"
+        # compute total successful customers per period
+        def sum_confirmed_customers(df):
+            # sum num_customers where status == 'Đã xác nhận'
+            try:
+                s = df.loc[df['status'] == 'Đã xác nhận', 'num_customers']
+                return pd.to_numeric(s, errors='coerce').fillna(0).sum()
+            except Exception:
+                return 0
+
+        trend_data = period_tours.groupby('period').apply(lambda d: pd.Series({
+            'value': sum_confirmed_customers(d)
+        })).reset_index()
+        y_label = "Lượt khách đặt thành công"
         color_seq = ['#636EFA']
-    else: # cancellation_rate
-        trend_data['ratio'] = np.where(
-            trend_data['total_customers'] > 0,
-            (trend_data['total_cancelled'] / trend_data['total_customers']) * 100,
-            0
-        )
-        y_label = "Tỷ lệ Hủy/Đổi (%)"
+    else:
+        # cancellation count per period: prefer summing 'cancel_count' (column U) if present
+        def sum_cancelled_customers(df):
+            if 'cancel_count' in df.columns:
+                try:
+                    s = pd.to_numeric(df['cancel_count'], errors='coerce').fillna(0)
+                    # treat negative as 0
+                    s = s[s > 0]
+                    return s.sum()
+                except Exception:
+                    return 0
+            else:
+                # fallback: sum num_customers where status in ['Đã hủy','Hoãn']
+                try:
+                    s = df.loc[df['status'].isin(['Đã hủy', 'Hoãn']), 'num_customers']
+                    return pd.to_numeric(s, errors='coerce').fillna(0).sum()
+                except Exception:
+                    return 0
+
+        trend_data = period_tours.groupby('period').apply(lambda d: pd.Series({
+            'value': sum_cancelled_customers(d)
+        })).reset_index()
+        y_label = "Lượt khách hủy/đổi"
         color_seq = ['#EF553B']
     
     # Định dạng trục X (quan trọng để hiển thị ngày thay vì tuần)
@@ -2184,13 +2220,15 @@ def create_ratio_trend_chart(tours_df, start_date, end_date, metric='success_rat
     
     # 3. Tạo biểu đồ đường
     fig = px.line(
-        trend_data, 
-        x='period_str', 
-        y='ratio', 
+        trend_data,
+        x='period_str',
+        y='value',
         title=title,
         markers=True,
         color_discrete_sequence=color_seq
     )
+    # Force integer-like hover/labels for counts
+    fig.update_traces(hovertemplate='%{x}<br>%{y:.0f}<extra></extra>')
     
     fig.update_xaxes(title=x_title)
     fig.update_yaxes(title=y_label)
