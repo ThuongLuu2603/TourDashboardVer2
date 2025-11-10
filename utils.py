@@ -139,23 +139,12 @@ def calculate_kpis(tours_df, plans_df, start_date, end_date, plans_daily_df=None
     current_data = filter_data_by_date(tours_df, start_date, end_date)
     confirmed_data = filter_confirmed_bookings(current_data)
     
-    # Calculate actual metrics.
-    # Prefer effective (post-cancellation) columns when present (revenue_effective, gross_profit_effective, num_customers_effective).
-    # This ensures KPIs reflect cancellations recorded via `cancel_count` (col U) rather than raw booked values.
-    if 'revenue_effective' in confirmed_data.columns:
-        actual_revenue = confirmed_data['revenue_effective'].sum()
-    else:
-        actual_revenue = confirmed_data['revenue'].sum()
-
-    if 'gross_profit_effective' in confirmed_data.columns:
-        actual_gross_profit = confirmed_data['gross_profit_effective'].sum()
-    else:
-        actual_gross_profit = confirmed_data['gross_profit'].sum()
-
-    if 'num_customers_effective' in confirmed_data.columns:
-        actual_customers = confirmed_data['num_customers_effective'].sum()
-    else:
-        actual_customers = confirmed_data['num_customers'].sum()
+    # Calculate actual metrics using RAW values (before cancellation adjustments)
+    # User preference: display booked values (revenue, gross_profit, num_customers)
+    # rather than effective values which have cancellations subtracted
+    actual_revenue = confirmed_data['revenue'].sum() if 'revenue' in confirmed_data.columns else 0
+    actual_gross_profit = confirmed_data['gross_profit'].sum() if 'gross_profit' in confirmed_data.columns else 0
+    actual_customers = confirmed_data['num_customers'].sum() if 'num_customers' in confirmed_data.columns else 0
     
     # Determine plan sums according to period type selected by user
     start_dt = pd.to_datetime(start_date)

@@ -234,7 +234,7 @@ with st.sidebar:
     # Quick date range options
     date_option = st.selectbox(
         "Chọn kỳ báo cáo",
-        ["Tuần", "Tháng", "Quý", "Năm", "Tùy chỉnh"]
+        ["Tuần", "Tháng", "Quý", "Năm", "KH 90 ngày", "Tùy chỉnh"]
     )
     
     # Xử lý Timezone an toàn
@@ -268,6 +268,10 @@ with st.sidebar:
         # Toàn bộ năm hiện tại (01/01 → 31/12)
         start_date = datetime(today.year, 1, 1)
         end_date = datetime(today.year, 12, 31, 23, 59, 59)
+    elif date_option == "KH 90 ngày":
+        # Kế hoạch 90 ngày: 22/09/2025 - 20/12/2025
+        start_date = datetime(2025, 9, 22)
+        end_date = datetime(2025, 12, 20, 23, 59, 59)
     else:  # Tùy chỉnh
         col1, col2 = st.columns(2)
         with col1:
@@ -500,7 +504,7 @@ if st.session_state.show_admin_ui:
 tab1, tab2, tab3 = st.tabs([
     "📊 Dashboard theo dõi Kinh Doanh",
     "🔍 Dashboard theo dõi sản phẩm",
-    "🤝 Dashboard theo dõi Đối tác" 
+    "🤝 Dashboard theo dõi Đối tác (pending)" 
 ])
 
 # ============================================================
