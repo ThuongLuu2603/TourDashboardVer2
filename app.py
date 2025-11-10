@@ -1310,7 +1310,7 @@ with tab2:
     with col3:
         st.metric(
             label="👥 LƯỢT KHÁCH TỔNG",
-            value=format_number(booking_metrics['total_booked_customers']),
+            value=format_number(kpis['actual_customers']),
             delta=f"{format_percentage(kpis['customer_growth'])} so với cùng kỳ"
         )
         with st.expander("Chi tiết"):
@@ -1729,8 +1729,11 @@ with tab3:
     st.markdown("### 📊 Vùng 2: Trạng thái Hợp đồng & Phân tích Dịch vụ")
     
     # Dữ liệu cho biểu đồ tròn (Tỷ trọng Trả trước/Trả sau)
-    payment_status_data = partner_filtered_data.groupby('payment_status')['partner'].count().reset_index()
-    payment_status_data.columns = ['status', 'count']
+    if 'payment_status' in partner_filtered_data.columns and 'partner' in partner_filtered_data.columns:
+        payment_status_data = partner_filtered_data.groupby('payment_status')['partner'].count().reset_index()
+        payment_status_data.columns = ['status', 'count']
+    else:
+        payment_status_data = pd.DataFrame(columns=['status', 'count'])
     
     col_status, col_price = st.columns([1, 2])
     
@@ -1848,45 +1851,52 @@ with tab3:
     # Bảng chi tiết Doanh thu/Chi phí/Lãi Gộp
     st.markdown("#### Bảng Chi tiết Hợp đồng và Tỷ suất Lãi Gộp")
     
-    # Lấy bảng hợp đồng chi tiết
-    df_partner_revenue_detail = partner_filtered_data.groupby(['partner', 'service_type', 'payment_status', 'contract_status']).agg(
-        total_revenue=('revenue', 'sum'),
-        total_service_cost=('service_cost', 'sum'),
-        num_bookings=('booking_id', 'count')
-    ).reset_index()
+    # Kiểm tra các cột cần thiết
+    required_detail_cols = ['partner', 'service_type', 'payment_status', 'contract_status', 'revenue', 'service_cost', 'booking_id']
+    missing_detail_cols = [col for col in required_detail_cols if col not in partner_filtered_data.columns]
     
-    df_partner_revenue_detail['profit_margin'] = np.where(
-        df_partner_revenue_detail['total_revenue'] > 0,
-        ((df_partner_revenue_detail['total_revenue'] - df_partner_revenue_detail['total_service_cost']) / df_partner_revenue_detail['total_revenue']) * 100,
-        0
-    )
-    
-    # Áp dụng formatting
-    df_partner_revenue_detail['total_revenue'] = df_partner_revenue_detail['total_revenue'].apply(format_currency)
-    df_partner_revenue_detail['total_service_cost'] = df_partner_revenue_detail['total_service_cost'].apply(format_currency)
-    df_partner_revenue_detail['profit_margin'] = df_partner_revenue_detail['profit_margin'].apply(lambda x: f"{x:.1f}%")
+    if not missing_detail_cols and not partner_filtered_data.empty:
+        # Lấy bảng hợp đồng chi tiết
+        df_partner_revenue_detail = partner_filtered_data.groupby(['partner', 'service_type', 'payment_status', 'contract_status']).agg(
+            total_revenue=('revenue', 'sum'),
+            total_service_cost=('service_cost', 'sum'),
+            num_bookings=('booking_id', 'count')
+        ).reset_index()
+        
+        df_partner_revenue_detail['profit_margin'] = np.where(
+            df_partner_revenue_detail['total_revenue'] > 0,
+            ((df_partner_revenue_detail['total_revenue'] - df_partner_revenue_detail['total_service_cost']) / df_partner_revenue_detail['total_revenue']) * 100,
+            0
+        )
+        
+        # Áp dụng formatting
+        df_partner_revenue_detail['total_revenue'] = df_partner_revenue_detail['total_revenue'].apply(format_currency)
+        df_partner_revenue_detail['total_service_cost'] = df_partner_revenue_detail['total_service_cost'].apply(format_currency)
+        df_partner_revenue_detail['profit_margin'] = df_partner_revenue_detail['profit_margin'].apply(lambda x: f"{x:.1f}%")
 
-    df_partner_revenue_detail.rename(columns={
-        'contract_status': 'Trạng thái HĐ', 
-        'service_type': 'Loại DV', 
-        'payment_status': 'Tình trạng TT', 
-        'total_revenue': 'Doanh thu',
-        'total_service_cost': 'Chi phí DV',
-        'num_bookings': 'SL HĐ',
-        'profit_margin': 'Tỷ suất LN (%)'
-    }, inplace=True)
-    
-    # Hàm highlight_expiring (Giữ nguyên)
-    def highlight_expiring(s):
-        if s['Trạng thái HĐ'] == 'Sắp hết hạn':
-            return ['background-color: #ffe0e0; color: red'] * len(s)
-        return [''] * len(s)
+        df_partner_revenue_detail.rename(columns={
+            'contract_status': 'Trạng thái HĐ', 
+            'service_type': 'Loại DV', 
+            'payment_status': 'Tình trạng TT', 
+            'total_revenue': 'Doanh thu',
+            'total_service_cost': 'Chi phí DV',
+            'num_bookings': 'SL HĐ',
+            'profit_margin': 'Tỷ suất LN (%)'
+        }, inplace=True)
+        
+        # Hàm highlight_expiring (Giữ nguyên)
+        def highlight_expiring(s):
+            if s['Trạng thái HĐ'] == 'Sắp hết hạn':
+                return ['background-color: #ffe0e0; color: red'] * len(s)
+            return [''] * len(s)
 
-    st.dataframe(
-        df_partner_revenue_detail[['partner', 'Loại DV', 'Doanh thu', 'Chi phí DV', 'Tỷ suất LN (%)', 'Trạng thái HĐ', 'Tình trạng TT']]
-        .style.apply(highlight_expiring, axis=1), 
-        use_container_width=True, hide_index=True
-    )
+        st.dataframe(
+            df_partner_revenue_detail[['partner', 'Loại DV', 'Doanh thu', 'Chi phí DV', 'Tỷ suất LN (%)', 'Trạng thái HĐ', 'Tình trạng TT']]
+            .style.apply(highlight_expiring, axis=1), 
+            use_container_width=True, hide_index=True
+        )
+    else:
+        st.info("Không có đủ dữ liệu để hiển thị bảng chi tiết hợp đồng.")
 
 st.markdown("---")
 
