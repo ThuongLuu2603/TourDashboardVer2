@@ -394,21 +394,118 @@ with st.sidebar:
         plan_bus_units = [] if plans_df_ss is None else list(pd.Series(plans_df_ss['business_unit'].dropna().unique()) )
     except Exception:
         plan_bus_units = []
-    if plan_bus_units:
-        business_units = ["Tất cả"] + sorted(plan_bus_units)
-    else:
-        business_units = ["Tất cả"] + sorted(tours_df['business_unit'].unique().tolist())
-    selected_unit = st.selectbox("Chọn đơn vị", business_units)
     
-    # Route filter
+    # Định nghĩa cấu trúc nhóm đơn vị
+    unit_groups = {
+        "INBOUND": ["INBOUND"],
+        "FIT TRỤ SỞ": ["FIT TRỤ SỞ"],
+        "GIT TRỤ SỞ": ["GIT TRỤ SỞ"],
+        "ĐÔNG NAM BỘ": ["ĐỒNG NAI", "BÌNH DƯƠNG", "TÂY NINH", "VŨNG TÀU"],
+        "MIỀN BẮC": ["HÀ NỘI", "HẢI PHÒNG", "QUẢNG NINH", "NGHỆ AN", "THANH HÓA"],
+        "BẮC TRUNG BỘ (ĐN-HUẾ)": ["ĐÀ NẴNG", "HUẾ", "QUẢNG NGÃI"],
+        "NAM TRUNG BỘ": ["QUY NHƠN", "NHA TRANG", "ĐẮK LẮK", "LÂM ĐỒNG"],
+        "MIỀN TÂY": ["CẦN THƠ", "AN GIANG", "CÀ MAU", "RẠCH GIÁ", "PHÚ QUỐC"],
+        "DỊCH VỤ KHÁC": ["TRIPU", "TT LÁ XANH", "SIIC", "CARAVAN", "XUYÊN Á"]
+    }
+    
+    # Tạo danh sách options hiển thị (parent groups)
+    group_options = ["Tất cả"] + list(unit_groups.keys())
+    
+    # Lấy tất cả các đơn vị từ data
+    if plan_bus_units:
+        all_units = sorted(plan_bus_units)
+    else:
+        all_units = sorted(tours_df['business_unit'].unique().tolist())
+    
+    # Thêm các đơn vị không thuộc nhóm nào vào cuối danh sách
+    grouped_units = set()
+    for units in unit_groups.values():
+        grouped_units.update(units)
+    
+    other_units = [u for u in all_units if u not in grouped_units]
+    if other_units:
+        group_options.extend(other_units)
+    
+    # Multiselect cho phép chọn nhiều nhóm/đơn vị
+    selected_groups = st.multiselect(
+        "Chọn đơn vị",
+        options=group_options,
+        default=["Tất cả"],
+        help="Chọn một hoặc nhiều nhóm đơn vị. Chọn 'Tất cả' để xem toàn bộ."
+    )
+    
+    # Xử lý logic: Nếu chọn cả "Tất cả" và option khác, tự động bỏ "Tất cả"
+    if "Tất cả" in selected_groups and len(selected_groups) > 1:
+        selected_groups = [g for g in selected_groups if g != "Tất cả"]
+    
+    # Nếu không chọn gì, mặc định là "Tất cả"
+    if not selected_groups:
+        selected_groups = ["Tất cả"]
+    
+    # Xử lý logic chọn lựa
+    if "Tất cả" in selected_groups:
+        selected_unit = "Tất cả"
+        selected_units_list = all_units
+    else:
+        # Expand các nhóm thành danh sách đơn vị cụ thể
+        selected_units_list = []
+        for group in selected_groups:
+            if group in unit_groups:
+                # Đây là một nhóm
+                selected_units_list.extend(unit_groups[group])
+            else:
+                # Đây là đơn vị riêng lẻ
+                selected_units_list.append(group)
+        
+        # Loại bỏ trùng lặp
+        selected_units_list = list(set(selected_units_list))
+        
+        # Để tương thích với code cũ
+        if len(selected_units_list) == 1:
+            selected_unit = selected_units_list[0]
+        else:
+            selected_unit = f"{len(selected_units_list)} đơn vị"
+    
+    # Route filter - MULTISELECT
     st.subheader("Tuyến tour")
     if selected_unit != "Tất cả":
-        routes = ["Tất cả"] + sorted(
-            tours_df[tours_df['business_unit'] == selected_unit]['route'].unique().tolist()
-        )
+        if len(selected_units_list) == 1:
+            routes = ["Tất cả"] + sorted(
+                tours_df[tours_df['business_unit'] == selected_units_list[0]]['route'].unique().tolist()
+            )
+        else:
+            # Lấy tất cả routes của các đơn vị được chọn
+            routes = ["Tất cả"] + sorted(
+                tours_df[tours_df['business_unit'].isin(selected_units_list)]['route'].unique().tolist()
+            )
     else:
         routes = ["Tất cả"] + sorted(tours_df['route'].unique().tolist())
-    selected_route = st.selectbox("Chọn tuyến", routes)
+    
+    selected_routes = st.multiselect(
+        "Chọn tuyến",
+        options=routes,
+        default=["Tất cả"],
+        help="Chọn một hoặc nhiều tuyến tour. Chọn 'Tất cả' để xem toàn bộ."
+    )
+    
+    # Xử lý logic: Nếu chọn cả "Tất cả" và tuyến khác, tự động bỏ "Tất cả"
+    if "Tất cả" in selected_routes and len(selected_routes) > 1:
+        selected_routes = [r for r in selected_routes if r != "Tất cả"]
+    
+    # Nếu không chọn gì, mặc định là "Tất cả"
+    if not selected_routes:
+        selected_routes = ["Tất cả"]
+    
+    # Xác định selected_route và selected_routes_list
+    if "Tất cả" in selected_routes:
+        selected_route = "Tất cả"
+        selected_routes_list = [r for r in routes if r != "Tất cả"]
+    else:
+        selected_routes_list = selected_routes
+        if len(selected_routes_list) == 1:
+            selected_route = selected_routes_list[0]
+        else:
+            selected_route = f"{len(selected_routes_list)} tuyến"
     
     # Segment filter (use segments defined in the Plan sheet when available)
     st.subheader("Phân khúc")
@@ -649,17 +746,21 @@ else:
     except Exception:
         filtered_plans = pd.DataFrame()
 
+# Apply unit filter
 if selected_unit != "Tất cả":
     if 'business_unit' in tours_filtered_dimensional.columns:
-        tours_filtered_dimensional = tours_filtered_dimensional[tours_filtered_dimensional['business_unit'] == selected_unit]
+        # Lọc theo danh sách các đơn vị đã chọn
+        tours_filtered_dimensional = tours_filtered_dimensional[tours_filtered_dimensional['business_unit'].isin(selected_units_list)]
     if 'business_unit' in filtered_plans.columns:
-        filtered_plans = filtered_plans[filtered_plans['business_unit'] == selected_unit]
+        filtered_plans = filtered_plans[filtered_plans['business_unit'].isin(selected_units_list)]
 
+# Apply route filter
 if selected_route != "Tất cả":
     if 'route' in tours_filtered_dimensional.columns:
-        tours_filtered_dimensional = tours_filtered_dimensional[tours_filtered_dimensional['route'] == selected_route]
+        # Lọc theo danh sách các tuyến đã chọn
+        tours_filtered_dimensional = tours_filtered_dimensional[tours_filtered_dimensional['route'].isin(selected_routes_list)]
     if 'route' in filtered_plans.columns:
-        filtered_plans = filtered_plans[filtered_plans['route'] == selected_route]
+        filtered_plans = filtered_plans[filtered_plans['route'].isin(selected_routes_list)]
 
 if selected_segment != "Tất cả":
     if 'segment' in tours_filtered_dimensional.columns:
