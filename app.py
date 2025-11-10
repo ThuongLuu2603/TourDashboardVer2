@@ -101,8 +101,9 @@ from utils import (
     create_stacked_route_chart,
     create_top_routes_dual_axis_chart,
     create_top_routes_ratio_stacked,
-    create_segment_bu_comparison_chart
-    , group_small_categories
+    create_segment_bu_comparison_chart,
+    create_route_trend_chart,
+    group_small_categories
 )
 
 # Page configuration
@@ -1007,25 +1008,59 @@ with tab2:
     top_revenue = cached_get_top_routes(filtered_tours, int(top_n), 'revenue')
     top_customers = cached_get_top_routes(filtered_tours, int(top_n), 'customers')
     top_profit = cached_get_top_routes(filtered_tours, int(top_n), 'profit')
-# ========== VÙNG 1: TÓM TẮT HIỆU SUẤT BOOKING (ĐÃ THÊM KPI VÀ TRENDS) ==========
-    st.markdown("### Vùng 1: Tóm tắt Hiệu suất Booking")
+# ========== VÙNG 1: TÓM TẮT HIỆU SUẤT BOOKING ==========
+    st.markdown("### 📊 Vùng 1: Tóm tắt Hiệu suất Booking")
+    st.markdown("")
     
-    # --- Hàng 1: KPI Cấp cao ---
-    col1, col2, col3, col4 = st.columns(4)
+    # Row 1: 3 KPI Cards (giống Tab 1 Vùng 2)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         st.metric(
-            label="👥 Số lượng khách đã đặt",
-            value=format_number(booking_metrics['total_booked_customers'])
+            label="💰 DOANH THU TỔNG",
+            value=format_currency(kpis['actual_revenue']),
+            delta=f"{format_percentage(kpis['revenue_growth'])} so với cùng kỳ"
         )
-
+        with st.expander("Chi tiết"):
+            st.write(f"**Kế hoạch:** {format_currency(kpis['planned_revenue'])}")
+            st.write(f"**Thực hiện:** {format_currency(kpis['actual_revenue'])}")
+            st.write(f"**Hoàn thành:** {format_percentage(kpis['revenue_completion'])}")
+            st.write(f"**Cùng kỳ năm trước:** {format_currency(kpis['ly_revenue'])}")
+            st.write(f"**Tăng trưởng:** {format_percentage(kpis['revenue_growth'])}")
+    
     with col2:
         st.metric(
-            label="💰 Tổng Doanh thu",
-            value=format_currency(kpis['actual_revenue'])
+            label="💵 LÃI GỘP",
+            value=format_currency(kpis['actual_gross_profit']),
+            delta=f"{format_percentage(kpis['profit_growth'])} so với cùng kỳ"
         )
+        with st.expander("Chi tiết"):
+            st.write(f"**Kế hoạch:** {format_currency(kpis['planned_gross_profit'])}")
+            st.write(f"**Thực hiện:** {format_currency(kpis['actual_gross_profit'])}")
+            profit_completion = calculate_completion_rate(kpis['actual_gross_profit'], kpis['planned_gross_profit'])
+            st.write(f"**Hoàn thành:** {format_percentage(profit_completion)}")
+            st.write(f"**Cùng kỳ năm trước:** {format_currency(kpis['ly_gross_profit'])}")
+            st.write(f"**Tăng trưởng:** {format_percentage(kpis['profit_growth'])}")
+    
     with col3:
-        st.markdown("##### 📈 Tỷ lệ Lấp đầy BQ (FIT)")
+        st.metric(
+            label="👥 LƯỢT KHÁCH TỔNG",
+            value=format_number(booking_metrics['total_booked_customers']),
+            delta=f"{format_percentage(kpis['customer_growth'])} so với cùng kỳ"
+        )
+        with st.expander("Chi tiết"):
+            st.write(f"**Kế hoạch:** {format_number(kpis['planned_customers'])}")
+            st.write(f"**Thực hiện:** {format_number(kpis['actual_customers'])}")
+            st.write(f"**Hoàn thành:** {format_percentage(kpis['customer_completion'])}")
+            st.write(f"**Cùng kỳ năm trước:** {format_number(kpis['ly_customers'])}")
+            st.write(f"**Tăng trưởng:** {format_percentage(kpis['customer_growth'])}")
+    
+    st.markdown("")
+    
+    # Row 2: Gauge chart
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
         fig_occ = create_gauge_chart(
             ops_metrics['avg_occupancy'],
             "Tỷ lệ Lấp đầy BQ (FIT)",
@@ -1034,59 +1069,13 @@ with tab2:
             is_inverse_metric=False
         )
         st.plotly_chart(fig_occ, use_container_width=True, key="gauge_tab2")
-    with col4:
-        st.empty()
-
-    st.markdown("---")
-
-
-    # --- Hàng 2: Tỷ lệ Thành công (Gauge & Trend) ---
-    st.markdown("#### 🟢 Hiệu suất Booking Thành công")
-    col1, col2 = st.columns([1, 3]) # Tỷ lệ 1:3 cho Gauge và Line Chart
-
-    with col1:
-        # Tỷ lệ booking thành công (Gauge Chart)
-        fig_success = create_gauge_chart(
-            booking_metrics['success_rate'],
-            "Tỷ lệ booking thành công",
-            max_value=100, 
-            threshold=90
-        )
-        st.plotly_chart(fig_success, use_container_width=True)
     
     with col2:
-        # Xu hướng tỷ lệ booking thành công (Line Chart)
-        fig_success_trend = create_ratio_trend_chart(tours_filtered_dimensional, start_date, end_date, 
-                                                     metric='success_rate', 
-                                                     title='Xu hướng Tỷ lệ Booking Thành công (Theo ngày/tuần)')
-        st.plotly_chart(fig_success_trend, use_container_width=True)
+        # Có thể thêm chart khác hoặc để trống
+        st.markdown("")
 
     st.markdown("---")
 
-
-    # --- Hàng 3: Tỷ lệ Hủy/Đổi (Gauge & Trend) ---
-    st.markdown("#### 🔴 Hiệu suất Khách Hàng Hủy/Đổi")
-    col1, col2 = st.columns([1, 3]) # Tỷ lệ 1:3 cho Gauge và Line Chart
-
-    with col1:
-        # Tỷ lệ khách hàng hủy tour hoặc thay đổi (Gauge Chart)
-        fig_cancel = create_gauge_chart(
-            booking_metrics['cancel_change_rate'],
-            "Tỷ lệ Khách Hủy/Đổi",
-            max_value=30, 
-            threshold=15, 
-            is_inverse_metric=True
-        )
-        st.plotly_chart(fig_cancel, use_container_width=True)
-        
-    with col2:
-        # Xu hướng tỷ lệ khách hàng hủy tour (Line Chart)
-        fig_cancel_trend_ratio = create_ratio_trend_chart(tours_filtered_dimensional, start_date, end_date, 
-                               metric='cancellation_rate', 
-                               title='Xu hướng Tỷ lệ Khách Hủy/Đổi (Theo ngày/tuần)')
-        st.plotly_chart(fig_cancel_trend_ratio, use_container_width=True)
-
-    st.markdown("---")
 
 
     # ========== VÙNG 2: THEO TUYẾN ==========
@@ -1100,7 +1089,9 @@ with tab2:
     
     # Row 1: Top tuyến Tour charts
     st.markdown("#### Top Tuyến Tour")
-    col1, col2, col3 = st.columns(3)
+    
+    # Hàng 1: 2 biểu đồ đầu
+    col1, col2 = st.columns(2)
     
     with col1:
         st.markdown("##### Doanh thu (Phân bổ BU)")
@@ -1112,19 +1103,58 @@ with tab2:
         fig_cust_stacked = create_stacked_route_chart(filtered_tours, metric='num_customers', title='', top_n=top_n)
         st.plotly_chart(fig_cust_stacked, use_container_width=True, key="tab2_cust_stacked")
     
-    with col3:
+    # Hàng 2: 2 biểu đồ còn lại
+    col1, col2 = st.columns(2)
+    
+    with col1:
         st.markdown("##### Lãi Gộp (Phân bổ BU)")
         fig_profit_stacked = create_stacked_route_chart(filtered_tours, metric='gross_profit', title='', top_n=top_n)
         st.plotly_chart(fig_profit_stacked, use_container_width=True, key="tab2_profit_stacked")
     
-    st.markdown("")
+    with col2:
+        st.markdown("##### Tỷ suất Lãi Gộp theo Tuyến")
+        if not route_table.empty:
+            top_10_margin = route_table.nlargest(top_n, 'profit_margin')[['route', 'profit_margin']]
+            fig = create_profit_margin_chart_with_color(top_10_margin, 'profit_margin', 'route', '')
+            st.plotly_chart(fig, use_container_width=True)
+    
+    st.markdown("---")
 
-    # Row 2: Profit margin with color coding
-    st.markdown("#### Tỷ suất Lãi Gộp theo Tuyến")
-    if not route_table.empty:
-        top_10_margin = route_table.nlargest(top_n, 'profit_margin')[['route', 'profit_margin']]
-        fig = create_profit_margin_chart_with_color(top_10_margin, 'profit_margin', 'route', '')
-        st.plotly_chart(fig, use_container_width=True)
+    # Xu hướng theo Tuyến Tour
+    st.markdown("#### Xu hướng Top Tuyến Tour theo Thời gian")
+    
+    # Hàng 1: Xu hướng Doanh thu
+    st.markdown("##### Xu hướng Doanh thu")
+    fig_route_revenue_trend = create_route_trend_chart(
+        filtered_tours, 
+        start_date, 
+        end_date, 
+        metric='revenue', 
+        top_n=10
+    )
+    st.plotly_chart(fig_route_revenue_trend, use_container_width=True)
+    
+    # Hàng 2: Xu hướng Lãi Gộp
+    st.markdown("##### Xu hướng Lãi Gộp")
+    fig_route_profit_trend = create_route_trend_chart(
+        filtered_tours, 
+        start_date, 
+        end_date, 
+        metric='gross_profit', 
+        top_n=10
+    )
+    st.plotly_chart(fig_route_profit_trend, use_container_width=True)
+    
+    # Hàng 3: Xu hướng Lượt khách
+    st.markdown("##### Xu hướng Lượt khách")
+    fig_route_customers_trend = create_route_trend_chart(
+        filtered_tours, 
+        start_date, 
+        end_date, 
+        metric='num_customers', 
+        top_n=10
+    )
+    st.plotly_chart(fig_route_customers_trend, use_container_width=True)
     
     st.markdown("---")
 
@@ -1295,6 +1325,57 @@ with tab2:
         
     st.markdown("---")
 
+
+# ========== VÙNG 5: HIỆU SUẤT BOOKING VÀ HỦY/ĐỔI ==========
+    st.markdown("### Vùng 5: Hiệu suất Booking và Hủy/Đổi")
+
+    # --- Hàng 1: Tỷ lệ Thành công (Gauge & Trend) ---
+    st.markdown("#### 🟢 Hiệu suất Booking Thành công")
+    col1, col2 = st.columns([1, 3]) # Tỷ lệ 1:3 cho Gauge và Line Chart
+
+    with col1:
+        # Tỷ lệ booking thành công (Gauge Chart)
+        fig_success = create_gauge_chart(
+            booking_metrics['success_rate'],
+            "Tỷ lệ booking thành công",
+            max_value=100, 
+            threshold=90
+        )
+        st.plotly_chart(fig_success, use_container_width=True)
+    
+    with col2:
+        # Xu hướng tỷ lệ booking thành công (Line Chart)
+        fig_success_trend = create_ratio_trend_chart(tours_filtered_dimensional, start_date, end_date, 
+                                                     metric='success_rate', 
+                                                     title='Xu hướng Tỷ lệ Booking Thành công (Theo ngày/tuần)')
+        st.plotly_chart(fig_success_trend, use_container_width=True)
+
+    st.markdown("---")
+
+
+    # --- Hàng 2: Tỷ lệ Hủy/Đổi (Gauge & Trend) ---
+    st.markdown("#### 🔴 Hiệu suất Khách Hàng Hủy/Đổi")
+    col1, col2 = st.columns([1, 3]) # Tỷ lệ 1:3 cho Gauge và Line Chart
+
+    with col1:
+        # Tỷ lệ khách hàng hủy tour hoặc thay đổi (Gauge Chart)
+        fig_cancel = create_gauge_chart(
+            booking_metrics['cancel_change_rate'],
+            "Tỷ lệ Khách Hủy/Đổi",
+            max_value=30, 
+            threshold=15, 
+            is_inverse_metric=True
+        )
+        st.plotly_chart(fig_cancel, use_container_width=True)
+        
+    with col2:
+        # Xu hướng tỷ lệ khách hàng hủy tour (Line Chart)
+        fig_cancel_trend_ratio = create_ratio_trend_chart(tours_filtered_dimensional, start_date, end_date, 
+                               metric='cancellation_rate', 
+                               title='Xu hướng Tỷ lệ Khách Hủy/Đổi (Theo ngày/tuần)')
+        st.plotly_chart(fig_cancel_trend_ratio, use_container_width=True)
+
+    st.markdown("---")
 
 
 

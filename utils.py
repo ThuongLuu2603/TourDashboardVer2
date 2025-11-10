@@ -1593,13 +1593,13 @@ def get_channel_breakdown(tours_df, start_date, end_date, metric='revenue'):
 
 def create_profit_margin_chart_with_color(data, x_col, y_col, title):
     """
-    Create horizontal bar chart with continuous color scale (temperature/heatmap style)
+    Create vertical bar chart with continuous color scale (temperature/heatmap style)
     """
     # Use continuous color scale based on margin values
     fig = go.Figure(go.Bar(
-        x=data[x_col],
-        y=data[y_col],
-        orientation='h',
+        x=data[y_col],
+        y=data[x_col],
+        orientation='v',  # Changed to vertical
         marker=dict(
             color=data[x_col],
             colorscale='RdYlGn',  # Red-Yellow-Green temperature scale
@@ -1616,15 +1616,16 @@ def create_profit_margin_chart_with_color(data, x_col, y_col, title):
         ),
         text=data[x_col].apply(lambda x: f'{x:.1f}%'),
         textposition='outside',
-        hovertemplate='%{y}<br>Tỷ suất: %{x:.2f}%<extra></extra>'
+        hovertemplate='%{x}<br>Tỷ suất: %{y:.2f}%<extra></extra>'
     ))
     
     fig.update_layout(
         title=title,
-        xaxis_title="Tỷ suất Lãi Gộp (%)",
-        yaxis_title="",
-        height=max(300, len(data) * 30),
-        margin=dict(l=30, r=100, t=50, b=30),
+        yaxis_title="Tỷ suất Lãi Gộp (%)",
+        xaxis_title="",
+        xaxis=dict(tickangle=45, tickfont=dict(size=10)),  # Rotate labels to the right
+        height=300,  # Match the height of stacked charts
+        margin=dict(l=60, r=100, t=30, b=80),  # Increase bottom margin for rotated labels
         showlegend=False
     )
     
@@ -2491,4 +2492,140 @@ def create_segment_bu_comparison_chart(df_data_long, grouping_col='segment'):
                 t.marker = dict(color=t.marker.color if hasattr(t.marker, 'color') else '#00CC96', size=6)
             except Exception:
                 pass
+    return fig
+
+
+def create_route_trend_chart(tours_df, start_date, end_date, metric='revenue', top_n=10):
+    """
+    Create a line chart showing trend over time for top N routes by specified metric
+    
+    Args:
+        tours_df: DataFrame with tour data
+        start_date: Start date for filtering
+        end_date: End date for filtering
+        metric: 'revenue', 'gross_profit', or 'num_customers'
+        top_n: Number of top routes to display
+    
+    Returns:
+        Plotly figure object
+    """
+    # Filter confirmed bookings in period
+    confirmed_tours = filter_confirmed_bookings(tours_df)
+    period_tours = filter_data_by_date(confirmed_tours, start_date, end_date)
+    
+    if period_tours.empty:
+        return go.Figure().update_layout(
+            title="Không có dữ liệu",
+            height=300
+        )
+    
+    # Calculate period length in days
+    period_length = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
+    
+    # Determine grouping granularity
+    if period_length <= 7:
+        # Daily granularity for week or less
+        period_tours['period'] = pd.to_datetime(period_tours['booking_date']).dt.to_period('D')
+        x_title = "Ngày"
+        date_format = '%d/%m'
+    elif period_length <= 60:
+        # Weekly granularity for 2 months or less
+        period_tours['period'] = pd.to_datetime(period_tours['booking_date']).dt.to_period('W')
+        x_title = "Tuần"
+        date_format = 'T%U'
+    else:
+        # Monthly granularity for longer periods
+        period_tours['period'] = pd.to_datetime(period_tours['booking_date']).dt.to_period('M')
+        x_title = "Tháng"
+        date_format = '%m/%Y'
+    
+    # Get top N routes by total metric value
+    top_routes = period_tours.groupby('route')[metric].sum().nlargest(top_n).index.tolist()
+    
+    # Filter data for top routes only
+    top_routes_data = period_tours[period_tours['route'].isin(top_routes)].copy()
+    
+    # Group by period and route
+    trend_data = top_routes_data.groupby(['period', 'route'])[metric].sum().reset_index()
+    
+    # Sort by period to ensure chronological order
+    trend_data = trend_data.sort_values('period').reset_index(drop=True)
+    
+    # Format period for display AFTER sorting
+    if period_length <= 7:
+        trend_data['period_str'] = trend_data['period'].dt.strftime(date_format)
+    elif period_length <= 60:
+        trend_data['period_str'] = trend_data['period'].apply(lambda x: f"T{x.week}")
+    else:
+        trend_data['period_str'] = trend_data['period'].astype(str)
+    
+    # Get unique periods in chronological order for x-axis
+    unique_periods = trend_data[['period', 'period_str']].drop_duplicates().sort_values('period')['period_str'].tolist()
+    
+    # Create figure
+    fig = go.Figure()
+    
+    # Color palette for routes
+    colors = px.colors.qualitative.Plotly + px.colors.qualitative.Set2
+    
+    # Add a line for each route
+    for idx, route in enumerate(top_routes):
+        route_data = trend_data[trend_data['route'] == route].copy()
+        # Sort by period again to ensure line connects in correct order
+        route_data = route_data.sort_values('period')
+        
+        # Format text labels for data points based on metric
+        if metric == 'revenue' or metric == 'gross_profit':
+            text_labels = [format_currency(v) for v in route_data[metric]]
+            hover_template = f'<b>{route}</b><br>%{{x}}<br>%{{y:,.0f}} ₫<extra></extra>'
+        else:
+            text_labels = [format_number(v) for v in route_data[metric]]
+            hover_template = f'<b>{route}</b><br>%{{x}}<br>%{{y:,.0f}} khách<extra></extra>'
+        
+        fig.add_trace(go.Scatter(
+            x=route_data['period_str'],
+            y=route_data[metric],
+            name=route,
+            mode='lines+markers+text',
+            text=text_labels,
+            textposition='top center',
+            textfont=dict(size=8, color=colors[idx % len(colors)]),
+            line=dict(width=2, color=colors[idx % len(colors)]),
+            marker=dict(size=6),
+            hovertemplate=hover_template
+        ))
+    
+    # Update layout
+    metric_titles = {
+        'revenue': 'Doanh thu',
+        'gross_profit': 'Lãi Gộp',
+        'num_customers': 'Lượt khách'
+    }
+    
+    y_axis_title = metric_titles.get(metric, metric)
+    if metric in ['revenue', 'gross_profit']:
+        y_axis_title += ' (₫)'
+    
+    fig.update_layout(
+        xaxis_title=x_title,
+        yaxis_title=y_axis_title,
+        height=300,
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02,
+            font=dict(size=9)
+        ),
+        margin=dict(l=50, r=120, t=30, b=50),
+        hovermode='x unified',
+        xaxis=dict(
+            type='category',
+            categoryorder='array',
+            categoryarray=unique_periods
+        )
+    )
+    
     return fig
