@@ -907,36 +907,15 @@ with tab1:
     st.markdown("### Vùng 5: Thông tin tuyến tour")
 
     # Chuẩn bị dữ liệu cho cả 3 chỉ số
+    # Lấy top 10 theo revenue - hàm get_top_routes đã trả về đầy đủ revenue, num_customers, gross_profit
     top_revenue = cached_get_top_routes(filtered_tours, 10, 'revenue')
-    top_customers = cached_get_top_routes(filtered_tours, 10, 'customers')
-    top_profit = cached_get_top_routes(filtered_tours, 10, 'profit')
-
-    # Hợp nhất dữ liệu Top 10 vào 1 DataFrame duy nhất để so sánh
-    # Đảm bảo kiểu dữ liệu nhất quán cho cột route và loại bỏ NaN
+    
+    # Sử dụng trực tiếp top_revenue vì nó đã có đầy đủ cả 3 metrics
     if not top_revenue.empty:
-        top_revenue = top_revenue.copy()
-        top_revenue['route'] = top_revenue['route'].fillna('').astype(str).str.strip()
-        top_revenue = top_revenue[top_revenue['route'] != ''].copy()
-    
-    if not top_customers.empty:
-        top_customers = top_customers.copy()
-        top_customers['route'] = top_customers['route'].fillna('').astype(str).str.strip()
-        top_customers = top_customers[top_customers['route'] != ''].copy()
-    
-    if not top_profit.empty:
-        top_profit = top_profit.copy()
-        top_profit['route'] = top_profit['route'].fillna('').astype(str).str.strip()
-        top_profit = top_profit[top_profit['route'] != ''].copy()
-    
-    # Tạo DataFrame merge từ top_revenue (đã clean)
-    if not top_revenue.empty:
-        df_merged_top10 = top_revenue[['route', 'revenue']].copy()
-        if not top_customers.empty:
-            df_merged_top10 = df_merged_top10.merge(top_customers[['route', 'num_customers']], on='route', how='left')
-        if not top_profit.empty:
-            df_merged_top10 = df_merged_top10.merge(top_profit[['route', 'gross_profit']], on='route', how='left')
-        df_merged_top10 = df_merged_top10.fillna(0)
-        df_merged_top10 = df_merged_top10.sort_values('revenue', ascending=False) # Sắp xếp theo DT
+        df_merged_top10 = top_revenue[['route', 'revenue', 'num_customers', 'gross_profit']].copy()
+        df_merged_top10['route'] = df_merged_top10['route'].fillna('').astype(str).str.strip()
+        df_merged_top10 = df_merged_top10[df_merged_top10['route'] != ''].copy()
+        df_merged_top10 = df_merged_top10.sort_values('revenue', ascending=False)
     else:
         df_merged_top10 = pd.DataFrame()
 

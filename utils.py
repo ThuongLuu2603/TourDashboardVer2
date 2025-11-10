@@ -2317,38 +2317,44 @@ def create_top_routes_dual_axis_chart(df_data):
 
     cust_texts = [format_number(v) for v in df_data['num_customers']]
 
-    # Revenue bar with larger/contrasting labels
+    # Revenue bar with data labels on top
     fig.add_trace(go.Bar(
         x=df_data['route'], y=df_data['revenue'], name='Doanh thu', marker_color='#636EFA',
-        text=revenue_texts, textposition='outside', textfont=dict(size=12, color='#FFFFFF'),
-        hovertemplate='DT: %{y:,.0f} ₫<extra></extra>'
+        text=revenue_texts, textposition='outside', 
+        textfont=dict(size=9, color='black', family='Arial'),
+        hovertemplate='<b>Doanh thu</b><br>%{y:,.0f} ₫<extra></extra>'
     ), secondary_y=False)
 
-    # Profit bar with larger/contrasting labels (use white so it shows on dark background)
+    # Profit bar with data labels on top
     fig.add_trace(go.Bar(
         x=df_data['route'], y=df_data['gross_profit'], name='Lãi Gộp', marker_color='#FFA15A',
-        text=profit_texts, textposition='outside', textfont=dict(size=12, color='#FFFFFF'),
-        hovertemplate='LN: %{y:,.0f} ₫<extra></extra>'
+        text=profit_texts, textposition='outside', 
+        textfont=dict(size=9, color='black', family='Arial'),
+        hovertemplate='<b>Lãi Gộp</b><br>%{y:,.0f} ₫<extra></extra>'
     ), secondary_y=False)
 
-    # Customers line with slightly larger point labels
+    # Customers line with data labels
     fig.add_trace(go.Scatter(
-        x=df_data['route'], y=df_data['num_customers'], name='Lượt khách', marker=dict(color='#00CC96', size=8),
+        x=df_data['route'], y=df_data['num_customers'], name='Lượt khách', 
+        marker=dict(color='#00CC96', size=10),
         mode='lines+markers+text', line=dict(dash='dot', width=3),
-        text=cust_texts, textposition='top center', textfont=dict(size=11, color='#00CC96'),
-        hovertemplate='LK: %{y:,.0f}<extra></extra>'
+        text=cust_texts, textposition='top center', 
+        textfont=dict(size=9, color='black', family='Arial'),
+        hovertemplate='<b>Lượt khách</b><br>%{y:,.0f}<extra></extra>'
     ), secondary_y=True)
 
     # Cấu hình Layout
     fig.update_layout(
         title_text="So sánh DT, LN (Cột) và LK (Đường)",
         barmode='group',
-        height=400,
-        margin=dict(t=50, b=50, l=50, r=50),
-        legend=dict(orientation="h", y=1.1, x=0.5, xanchor='center'),
-        xaxis=dict(title="Tuyến Tour", tickangle=45),
+        height=500,  # Tăng chiều cao để có chỗ cho labels
+        margin=dict(t=80, b=120, l=60, r=60),  # Tăng margin để labels không bị cắt
+        legend=dict(orientation="h", y=1.15, x=0.5, xanchor='center'),
+        xaxis=dict(title="Tuyến Tour", tickangle=-45, tickfont=dict(size=10)),
         yaxis=dict(title="Doanh thu / Lãi Gộp (₫)", side='left', showgrid=True),
-        yaxis2=dict(title="Lượt khách", side='right', showgrid=False)
+        yaxis2=dict(title="Lượt khách", side='right', showgrid=False),
+        uniformtext_minsize=8,
+        uniformtext_mode='hide'
     )
     return fig
 
