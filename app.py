@@ -141,6 +141,7 @@ st.markdown("""
 
 DEFAULT_PLAN_URL = 'https://docs.google.com/spreadsheets/d/1mQYyJpdarm50syGxtJ6dLLJw99CAT4wCnZqy8qCp4JI/edit?gid=322447784#gid=322447784'
 DEFAULT_DATANET_URL = 'https://docs.google.com/spreadsheets/d/1Mmx7FS-BjHcnitmfiT4xRQ7CFZmBrl8tsV5IySdNYOw/edit?gid=29056776#gid=29056776'
+DEFAULT_KYBAOCAO_URL = 'https://docs.google.com/spreadsheets/d/1Mmx7FS-BjHcnitmfiT4xRQ7CFZmBrl8tsV5IySdNYOw/edit?gid=1543096179#gid=1543096179'
 
 with st.sidebar:
     st.markdown("---")
@@ -235,12 +236,16 @@ with st.sidebar:
     # Quick date range options
     date_option = st.selectbox(
         "Chọn kỳ báo cáo",
-        ["Tuần", "Tháng", "Quý", "Năm", "KH 90 ngày", "Tùy chỉnh"]
+        ["Tuần", "Tháng", "Quý", "Năm", "KH 90 ngày", "Kỳ Báo cáo", "Tùy chỉnh"]
     )
     
     # Xử lý Timezone an toàn
     vietnam_tz = pytz.timezone("Asia/Ho_Chi_Minh")
     today = datetime.now(vietnam_tz).replace(tzinfo=None) # Naive datetime
+    
+    # Reset flag nếu không chọn "Kỳ Báo cáo"
+    if date_option != "Kỳ Báo cáo":
+        st.session_state['use_kybaocao'] = False
     
     if date_option == "Tuần":
         # Tuần hiện tại (Monday - Sunday)
@@ -273,6 +278,95 @@ with st.sidebar:
         # Kế hoạch 90 ngày: 22/09/2025 - 20/12/2025
         start_date = datetime(2025, 9, 22)
         end_date = datetime(2025, 12, 20, 23, 59, 59)
+    elif date_option == "Kỳ Báo cáo":
+        # Load dữ liệu từ sheet Kỳ Báo Cáo
+        # Tải dữ liệu một lần và cache
+        if 'kybaocao_df' not in st.session_state:
+            with st.spinner('Đang tải dữ liệu Kỳ Báo Cáo...'):
+                try:
+                    # Convert Google Sheets URL to CSV export URL
+                    kybaocao_url = DEFAULT_KYBAOCAO_URL
+                    csv_url = kybaocao_url.replace('/edit?gid=', '/export?format=csv&gid=').replace('#gid=', '&gid=')
+                    csv_url = csv_url.split('&gid=')[0] + '&gid=' + csv_url.split('&gid=')[1].split('&')[0]
+                    
+                    # Read CSV
+                    df_raw = pd.read_csv(csv_url)
+                    st.session_state['kybaocao_df'] = df_raw
+                    
+                    # Debug: show first few rows and columns
+                    st.sidebar.caption(f"📊 Loaded {len(df_raw)} rows, {len(df_raw.columns)} columns")
+                    
+                    # Show column names in expander
+                    with st.sidebar.expander("🔍 Debug: Column names"):
+                        for i, col in enumerate(df_raw.columns[:25]):  # First 25 columns
+                            st.text(f"Col {i} ({chr(65+i) if i < 26 else 'Col'+str(i)}): {col}")
+                except Exception as e:
+                    st.error(f"Lỗi tải dữ liệu Kỳ Báo Cáo: {e}")
+                    st.session_state['kybaocao_df'] = pd.DataFrame()
+        
+        kybaocao_df = st.session_state.get('kybaocao_df', pd.DataFrame())
+        
+        # Cột V trong Google Sheets, tìm tên cột tương ứng
+        # Thử các tên cột có thể: column 21 (V = 22nd column, index 21), hoặc tên cột
+        report_period_col = None
+        
+        if not kybaocao_df.empty:
+            # Cột V là cột thứ 22 (index 21) - giả sử columns bắt đầu từ A=0
+            if len(kybaocao_df.columns) > 21:
+                report_period_col = kybaocao_df.columns[21]  # Cột V
+            
+            # Hoặc tìm theo tên cột có chứa "period", "tháng", "ky", etc.
+            for col in kybaocao_df.columns:
+                if any(keyword in str(col).lower() for keyword in ['period', 'tháng', 'thang', 'ky', 'kỳ', 'month']):
+                    report_period_col = col
+                    break
+            
+            if report_period_col and report_period_col in kybaocao_df.columns:
+                # Lấy danh sách các tháng từ cột V
+                available_periods = sorted([int(x) for x in kybaocao_df[report_period_col].dropna().unique() if str(x).replace('.','').replace('0','').isdigit() or isinstance(x, (int, float))])
+                
+                if available_periods:
+                    selected_month = st.selectbox(
+                        "Chọn tháng báo cáo:",
+                        available_periods,
+                        format_func=lambda x: f"Tháng {int(x)}",
+                        help="Chọn tháng báo cáo từ dữ liệu"
+                    )
+                    
+                    # Set flag để sử dụng dữ liệu Kỳ Báo Cáo thay vì Datanet
+                    st.session_state['use_kybaocao'] = True
+                    st.session_state['selected_month'] = int(selected_month)
+                    st.session_state['report_period_col'] = report_period_col
+                    
+                    # Lấy năm hiện tại hoặc năm từ data
+                    current_year = today.year
+                    
+                    # Không cần set start_date/end_date vì sẽ filter theo tháng trong cột V
+                    start_date = None
+                    end_date = None
+                    
+                    st.info(f"📊 Sử dụng dữ liệu Kỳ Báo cáo: **Tháng {int(selected_month)}/{current_year}**")
+                    
+                    # Set start_date/end_date cho KPI calculation (để lấy đúng plan tháng đó)
+                    from calendar import monthrange
+                    start_date = datetime(current_year, int(selected_month), 1)
+                    last_day = monthrange(current_year, int(selected_month))[1]
+                    end_date = datetime(current_year, int(selected_month), last_day, 23, 59, 59)
+                else:
+                    st.warning(f"Không tìm thấy dữ liệu tháng trong cột '{report_period_col}'")
+                    start_date = datetime(today.year, today.month, 1)
+                    end_date = today
+                    st.session_state['use_kybaocao'] = False
+            else:
+                st.warning(f"Không tìm thấy cột V (report period). Columns: {kybaocao_df.columns.tolist()[:10]}")
+                start_date = datetime(today.year, today.month, 1)
+                end_date = today
+                st.session_state['use_kybaocao'] = False
+        else:
+            st.warning("Sheet Kỳ Báo Cáo chưa có dữ liệu")
+            start_date = datetime(today.year, today.month, 1)
+            end_date = today
+            st.session_state['use_kybaocao'] = False
     else:  # Tùy chỉnh
         col1, col2 = st.columns(2)
         with col1:
@@ -288,7 +382,9 @@ with st.sidebar:
         start_date = datetime.combine(start_date, datetime.min.time())
         end_date = datetime.combine(end_date, datetime.max.time())
     
-    st.markdown(f"**Kỳ báo cáo:** {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}")
+    # Hiển thị kỳ báo cáo (chỉ hiển thị nếu không phải "Kỳ Báo cáo")
+    if date_option != "Kỳ Báo cáo":
+        st.markdown(f"**Kỳ báo cáo:** {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}")
     
     # Business unit filter
     st.subheader("Đơn vị kinh doanh")
@@ -398,6 +494,147 @@ with st.sidebar:
 # downstream charts/tables show no data. This prevents fallback generated data from appearing.
 data_meta = st.session_state.get('data_meta', {})
 used_sheet = bool(data_meta.get('used_sheet', False))
+
+# SWAP DATA SOURCE: Nếu chọn "Kỳ Báo cáo", thay thế tours_df bằng dữ liệu từ sheet Kỳ Báo Cáo
+if st.session_state.get('use_kybaocao', False):
+    kybaocao_df = st.session_state.get('kybaocao_df', pd.DataFrame())
+    selected_month = st.session_state.get('selected_month', None)
+    report_period_col = st.session_state.get('report_period_col', None)
+    
+    if not kybaocao_df.empty and selected_month and report_period_col:
+        # Filter theo tháng trong cột V
+        # Chuyển đổi cột về số để so sánh
+        kybaocao_df[report_period_col] = pd.to_numeric(kybaocao_df[report_period_col], errors='coerce')
+        tours_df = kybaocao_df[kybaocao_df[report_period_col] == selected_month].copy()
+        
+        # Debug: Show column names BEFORE mapping
+        st.sidebar.caption(f"Original columns: {', '.join(tours_df.columns.tolist()[:10])}...")
+        
+        # Show ALL columns in debug mode
+        with st.sidebar.expander("🔍 All original columns"):
+            for i, col in enumerate(tours_df.columns):
+                st.text(f"{i}: {col}")
+        
+        # COLUMN NAME MAPPING: Map Kỳ Báo Cáo column names to expected names
+        # Based on exact column positions from Google Sheets
+        column_mapping = {}
+        
+        # Map by column index (Google Sheets columns: A=0, B=1, C=2, etc.)
+        # Cột E (index 4): Ngày khởi hành
+        if len(tours_df.columns) > 4:
+            column_mapping[tours_df.columns[4]] = 'departure_date'
+        
+        # Cột G (index 6): lượt khách
+        if len(tours_df.columns) > 6:
+            column_mapping[tours_df.columns[6]] = 'num_customers'
+        
+        # Cột I (index 8): Doanh Thu
+        if len(tours_df.columns) > 8:
+            column_mapping[tours_df.columns[8]] = 'revenue'
+        
+        # Cột J (index 9): Lãi gộp
+        if len(tours_df.columns) > 9:
+            column_mapping[tours_df.columns[9]] = 'gross_profit'
+        
+        # Cột P (index 15): Tuyến Tour
+        if len(tours_df.columns) > 15:
+            column_mapping[tours_df.columns[15]] = 'route'
+        
+        # Cột Q (index 16): business_unit
+        if len(tours_df.columns) > 16:
+            column_mapping[tours_df.columns[16]] = 'business_unit'
+        
+        # Cột R (index 17): Tổng số khách (occu) -> tour_capacity
+        if len(tours_df.columns) > 17:
+            column_mapping[tours_df.columns[17]] = 'tour_capacity'
+        
+        # Cột S (index 18): Phân khúc
+        if len(tours_df.columns) > 18:
+            column_mapping[tours_df.columns[18]] = 'segment'
+        
+        # Cột T (index 19): Kênh bán
+        if len(tours_df.columns) > 19:
+            column_mapping[tours_df.columns[19]] = 'sales_channel'
+        
+        # Cột U (index 20): Số khách hủy
+        if len(tours_df.columns) > 20:
+            column_mapping[tours_df.columns[20]] = 'cancel_count'
+        
+        # Cột V (index 21): Kỳ báo cáo - will be used as report_period
+        if len(tours_df.columns) > 21:
+            column_mapping[tours_df.columns[21]] = 'report_period'
+        
+        # Show mapping results
+        if column_mapping:
+            with st.sidebar.expander("✅ Column mappings applied"):
+                for orig, new in column_mapping.items():
+                    st.text(f"{orig} → {new}")
+        
+        # Apply column mapping
+        if column_mapping:
+            tours_df = tours_df.rename(columns=column_mapping)
+            st.sidebar.success(f"✅ Mapped {len(column_mapping)} columns")
+        
+        # Xóa cột report_period để tránh conflict với logic hiện tại
+        if 'report_period' in tours_df.columns:
+            tours_df = tours_df.drop(columns=['report_period'])
+        
+        # Ensure numeric columns are properly typed
+        numeric_cols = ['num_customers', 'revenue', 'gross_profit', 'tour_capacity', 'cancel_count']
+        for col in numeric_cols:
+            if col in tours_df.columns:
+                tours_df[col] = pd.to_numeric(tours_df[col], errors='coerce').fillna(0)
+        
+        # Convert departure_date to datetime (for trend charts only, not for aggregation)
+        if 'departure_date' in tours_df.columns:
+            tours_df['departure_date'] = pd.to_datetime(tours_df['departure_date'], errors='coerce')
+        
+        # booking_date is for aggregation - use first day of selected month
+        tours_df['booking_date'] = pd.Timestamp(2025, selected_month, 1)
+        
+        # Add default values for missing essential columns
+        if 'cancel_count' not in tours_df.columns:
+            tours_df['cancel_count'] = 0
+        
+        # Add other commonly needed columns with defaults (for features not in Kỳ Báo Cáo)
+        if 'customer_id' not in tours_df.columns:
+            # Generate unique IDs for each row
+            tours_df['customer_id'] = range(1, len(tours_df) + 1)
+        
+        if 'partner' not in tours_df.columns:
+            tours_df['partner'] = 'Unknown'
+        
+        if 'customer_age_group' not in tours_df.columns:
+            tours_df['customer_age_group'] = 'Unknown'
+        
+        if 'customer_nationality' not in tours_df.columns:
+            tours_df['customer_nationality'] = 'Vietnam'
+        
+        if 'contract_status' not in tours_df.columns:
+            tours_df['contract_status'] = 'Đang triển khai'
+        
+        if 'payment_status' not in tours_df.columns:
+            tours_df['payment_status'] = 'Đã thanh toán'
+        
+        if 'service_type' not in tours_df.columns:
+            tours_df['service_type'] = 'Tour'
+        
+        # Kiểm tra và log các columns quan trọng
+        required_cols = ['revenue', 'gross_profit', 'num_customers', 'booking_date', 'business_unit', 'route', 'segment']
+        missing_cols = [col for col in required_cols if col not in tours_df.columns]
+        
+        if missing_cols:
+            st.sidebar.error(f"⚠️ Thiếu columns: {', '.join(missing_cols)}")
+            st.sidebar.info(f"Available columns: {', '.join(tours_df.columns.tolist())}")
+        else:
+            st.sidebar.success(f"✅ All required columns present")
+        
+        used_sheet = True  # Mark as valid data source
+        
+        st.sidebar.success(f"✅ Đã tải {len(tours_df)} dòng dữ liệu tháng {selected_month}")
+    else:
+        st.warning("Không tìm thấy dữ liệu cho tháng đã chọn")
+
 if used_sheet:
     tours_filtered_dimensional = tours_df.copy()
     filtered_plans = plans_df.copy()
@@ -413,15 +650,20 @@ else:
         filtered_plans = pd.DataFrame()
 
 if selected_unit != "Tất cả":
-    tours_filtered_dimensional = tours_filtered_dimensional[tours_filtered_dimensional['business_unit'] == selected_unit]
-    filtered_plans = filtered_plans[filtered_plans['business_unit'] == selected_unit]
+    if 'business_unit' in tours_filtered_dimensional.columns:
+        tours_filtered_dimensional = tours_filtered_dimensional[tours_filtered_dimensional['business_unit'] == selected_unit]
+    if 'business_unit' in filtered_plans.columns:
+        filtered_plans = filtered_plans[filtered_plans['business_unit'] == selected_unit]
 
 if selected_route != "Tất cả":
-    tours_filtered_dimensional = tours_filtered_dimensional[tours_filtered_dimensional['route'] == selected_route]
-    filtered_plans = filtered_plans[filtered_plans['route'] == selected_route]
+    if 'route' in tours_filtered_dimensional.columns:
+        tours_filtered_dimensional = tours_filtered_dimensional[tours_filtered_dimensional['route'] == selected_route]
+    if 'route' in filtered_plans.columns:
+        filtered_plans = filtered_plans[filtered_plans['route'] == selected_route]
 
 if selected_segment != "Tất cả":
-    tours_filtered_dimensional = tours_filtered_dimensional[tours_filtered_dimensional['segment'] == selected_segment]
+    if 'segment' in tours_filtered_dimensional.columns:
+        tours_filtered_dimensional = tours_filtered_dimensional[tours_filtered_dimensional['segment'] == selected_segment]
     # Don't filter plans by segment when using Google Sheets data as it may not have segment breakdown
     # Only filter if we're using generated data or if plans actually have valid segment data
     # Use the actual data_meta key stored in session_state (data_meta)
@@ -451,24 +693,47 @@ if selected_service != "Tất cả":
 
 # Calculate KPIs using dimensionally filtered data (calculate_kpis will handle date filtering)
 # Pass daily/weekly expanded plans from session_state when available so KPIs use correct granularity
-kpis = cached_calculate_kpis(
-    tours_filtered_dimensional,
-    filtered_plans,
-    start_date,
-    end_date,
-    st.session_state.get('plans_daily_df'),
-    st.session_state.get('plans_weekly_df'),
-    date_option,
-    selected_segment
-)
+# Nếu dùng Kỳ Báo cáo, không filter theo date trong tours_df (đã filter theo tháng rồi)
+# nhưng vẫn cần start_date/end_date để lấy đúng KPI plan tháng đó
+use_kybaocao = st.session_state.get('use_kybaocao', False)
 
-
-# Also create a date+dimension filtered version for charts that don't need historical data
-filtered_tours = filter_data_by_date(tours_filtered_dimensional, start_date, end_date)
+if use_kybaocao:
+    # Khi dùng Kỳ Báo cáo, data đã được filter theo tháng trong cột V
+    # Nhưng vẫn cần start_date/end_date để calculate_kpis lấy đúng plan tháng đó
+    # start_date/end_date đã được set ở trên (đầu tháng -> cuối tháng)
+    kpis = cached_calculate_kpis(
+        tours_filtered_dimensional,
+        filtered_plans,
+        start_date,
+        end_date,
+        st.session_state.get('plans_daily_df'),
+        st.session_state.get('plans_weekly_df'),
+        "Tháng",  # Force period_type = "Tháng" để lấy plan tháng
+        selected_segment
+    )
+    # Không filter theo date cho filtered_tours vì data đã được filter theo tháng
+    filtered_tours = tours_filtered_dimensional.copy()
+else:
+    kpis = cached_calculate_kpis(
+        tours_filtered_dimensional,
+        filtered_plans,
+        start_date,
+        end_date,
+        st.session_state.get('plans_daily_df'),
+        st.session_state.get('plans_weekly_df'),
+        date_option,
+        selected_segment
+    )
+    # Also create a date+dimension filtered version for charts that don't need historical data
+    filtered_tours = filter_data_by_date(tours_filtered_dimensional, start_date, end_date)
 
 # TÍNH TOÁN BOOKING METRICS CHO TAB 2 (ĐÃ DI CHUYỂN)
 # Use the dimensional tours frame so booking metrics respect the sheet-only lock above
-booking_metrics = cached_calculate_booking_metrics(tours_filtered_dimensional, start_date, end_date)
+if use_kybaocao:
+    # Khi dùng Kỳ Báo cáo, data đã filter theo tháng, vẫn pass start_date/end_date để tính đúng
+    booking_metrics = cached_calculate_booking_metrics(tours_filtered_dimensional, start_date, end_date)
+else:
+    booking_metrics = cached_calculate_booking_metrics(tours_filtered_dimensional, start_date, end_date)
 
 
 if 'show_admin_ui' not in st.session_state:

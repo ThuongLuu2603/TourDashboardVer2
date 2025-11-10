@@ -122,9 +122,19 @@ def filter_data_by_date(df, start_date, end_date, date_column='booking_date'):
 
 
 def filter_confirmed_bookings(df):
-    """Filter only confirmed bookings (exclude cancelled/postponed)"""
+    """Filter only confirmed bookings (exclude cancelled/postponed)
+    
+    For Kỳ Báo Cáo data: all records are already confirmed, no status column needed.
+    For Datanet data: filter by status == 'Đã xác nhận'
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+    
+    # If no status column, assume all bookings are confirmed (Kỳ Báo Cáo case)
     if 'status' not in df.columns:
-        return pd.DataFrame(columns=df.columns)
+        return df.copy()
+    
+    # Filter by confirmed status
     return df[df['status'] == 'Đã xác nhận'].copy()
 
 
@@ -404,9 +414,10 @@ def calculate_kpis(tours_df, plans_df, start_date, end_date, plans_daily_df=None
     last_year_data = filter_data_by_date(tours_df, last_year_start, last_year_end)
     last_year_confirmed = filter_confirmed_bookings(last_year_data)
     
-    ly_revenue = last_year_confirmed['revenue'].sum()
-    ly_gross_profit = last_year_confirmed['gross_profit'].sum()
-    ly_customers = last_year_confirmed['num_customers'].sum()
+    # Safe column access with fallback to 0
+    ly_revenue = last_year_confirmed['revenue'].sum() if 'revenue' in last_year_confirmed.columns else 0
+    ly_gross_profit = last_year_confirmed['gross_profit'].sum() if 'gross_profit' in last_year_confirmed.columns else 0
+    ly_customers = last_year_confirmed['num_customers'].sum() if 'num_customers' in last_year_confirmed.columns else 0
     
     # Completion rates
     revenue_completion = calculate_completion_rate(actual_revenue, planned_revenue)
@@ -792,7 +803,13 @@ def calculate_operational_metrics(tours_df):
     
     # Cancellation/postponement rate
     total_bookings = len(tours_df)
-    cancelled_postponed = len(tours_df[tours_df['status'].isin(['Đã hủy', 'Hoãn'])])
+    if 'status' in tours_df.columns:
+        cancelled_postponed = len(tours_df[tours_df['status'].isin(['Đã hủy', 'Hoãn'])])
+    elif 'cancel_count' in tours_df.columns:
+        # For Kỳ Báo Cáo: sum cancel_count
+        cancelled_postponed = pd.to_numeric(tours_df['cancel_count'], errors='coerce').fillna(0).sum()
+    else:
+        cancelled_postponed = 0
     # Hàm này đã có bảo vệ chia cho 0
     cancel_rate = (cancelled_postponed / total_bookings * 100) if total_bookings > 0 else 0
     
@@ -902,6 +919,11 @@ def get_unit_breakdown(tours_df, plans_df, start_date, end_date, metric='revenue
     """
     current_data = filter_data_by_date(tours_df, start_date, end_date)
     confirmed_data = filter_confirmed_bookings(current_data)
+    
+    # Check if business_unit column exists
+    if 'business_unit' not in confirmed_data.columns:
+        st.warning("⚠️ Column 'business_unit' not found in data. Cannot generate breakdown.")
+        return pd.DataFrame(columns=['business_unit', 'completion'])
     
     start_dt = pd.to_datetime(start_date)
     end_dt = pd.to_datetime(end_date)
@@ -1363,13 +1385,16 @@ def create_trend_chart(tours_df, start_date, end_date, metrics=['revenue', 'cust
     confirmed_tours = filter_confirmed_bookings(tours_df)
     period_tours = filter_data_by_date(confirmed_tours, start_date, end_date)
     
+    # Use departure_date if available (for Kỳ Báo Cáo), otherwise use booking_date
+    date_col = 'departure_date' if 'departure_date' in period_tours.columns else 'booking_date'
+    
     # Calculate period length in days
     period_length = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
     
     # Determine grouping granularity
     if period_length <= 7:
         # Daily granularity for week or less
-        period_tours['period'] = pd.to_datetime(period_tours['booking_date']).dt.to_period('D')
+        period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period('D')
         period_data = period_tours.groupby('period').agg({
             'revenue': 'sum',
             'num_customers': 'sum',
@@ -1379,7 +1404,7 @@ def create_trend_chart(tours_df, start_date, end_date, metrics=['revenue', 'cust
         x_title = "Ngày"
     elif period_length <= 60:
         # Weekly granularity for 2 months or less
-        period_tours['period'] = pd.to_datetime(period_tours['booking_date']).dt.to_period('W')
+        period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period('W')
         period_data = period_tours.groupby('period').agg({
             'revenue': 'sum',
             'num_customers': 'sum',
@@ -1389,7 +1414,7 @@ def create_trend_chart(tours_df, start_date, end_date, metrics=['revenue', 'cust
         x_title = "Tuần"
     else:
         # Monthly granularity for longer periods
-        period_tours['period'] = pd.to_datetime(period_tours['booking_date']).dt.to_period('M')
+        period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period('M')
         period_data = period_tours.groupby('period').agg({
             'revenue': 'sum',
             'num_customers': 'sum',
@@ -1504,6 +1529,15 @@ def calculate_cac_by_channel(tours_df, start_date, end_date):
     confirmed_tours = filter_confirmed_bookings(tours_df)
     period_tours = filter_data_by_date(confirmed_tours, start_date, end_date)
     
+    # Check if required columns exist
+    if 'sales_channel' not in period_tours.columns:
+        return pd.DataFrame(columns=['sales_channel', 'total_opex', 'unique_customers', 'revenue', 'cac'])
+    
+    # Check if opex column exists, if not use estimated opex (e.g., 10% of revenue)
+    if 'opex' not in period_tours.columns:
+        # Estimate opex as percentage of revenue for Kỳ Báo Cáo data
+        period_tours['opex'] = period_tours['revenue'] * 0.1  # Assume 10% opex/revenue ratio
+    
     channel_metrics = period_tours.groupby('sales_channel').agg({
         'opex': 'sum',
         'customer_id': 'nunique',  # Unique customers
@@ -1528,14 +1562,29 @@ def calculate_clv_by_segment(tours_df):
     """
     confirmed_tours = filter_confirmed_bookings(tours_df)
     
-    # Calculate CLV = Total revenue from repeat customers / Number of customers
-    segment_metrics = confirmed_tours.groupby('segment').agg({
-        'customer_id': 'nunique',
-        'revenue': 'sum',
-        'booking_id': 'count'
-    }).reset_index()
+    # Check if required columns exist
+    if 'segment' not in confirmed_tours.columns:
+        return pd.DataFrame(columns=['segment', 'unique_customers', 'total_revenue', 'total_bookings', 'avg_bookings_per_customer', 'clv'])
     
-    segment_metrics.columns = ['segment', 'unique_customers', 'total_revenue', 'total_bookings']
+    # Use row count as booking count if booking_id doesn't exist
+    agg_dict = {
+        'customer_id': 'nunique',
+        'revenue': 'sum'
+    }
+    
+    if 'booking_id' in confirmed_tours.columns:
+        agg_dict['booking_id'] = 'count'
+    
+    # Calculate CLV = Total revenue from repeat customers / Number of customers
+    segment_metrics = confirmed_tours.groupby('segment').agg(agg_dict).reset_index()
+    
+    if 'booking_id' in confirmed_tours.columns:
+        segment_metrics.columns = ['segment', 'unique_customers', 'total_revenue', 'total_bookings']
+    else:
+        # Use customer count as proxy for bookings
+        segment_metrics.columns = ['segment', 'unique_customers', 'total_revenue']
+        segment_metrics['total_bookings'] = confirmed_tours.groupby('segment').size().values
+    
     # ĐÃ SỬA: Bảo vệ chia cho 0
     segment_metrics['avg_bookings_per_customer'] = np.where(
         segment_metrics['unique_customers'] > 0,
@@ -1646,17 +1695,29 @@ def get_route_detailed_table(tours_df, plans_df, start_date, end_date):
                                      'planned_revenue', 'revenue_completion', 'occupancy_rate', 'cancel_rate'])
 
     # 1. Tính ACTUALS, OCCUPANCY, và CANCEL/CHANGE Rate theo tuyến
-    route_metrics = period_tours_all.groupby('route').agg(
-        # Thực hiện
-        revenue=('revenue', lambda x: x[period_tours_all['status'] == 'Đã xác nhận'].sum()),
-        gross_profit=('gross_profit', lambda x: x[period_tours_all['status'] == 'Đã xác nhận'].sum()),
-        num_customers_confirmed=('num_customers', lambda x: x[period_tours_all['status'] == 'Đã xác nhận'].sum()),
-        num_customers_all=('num_customers', 'sum'),
-        
-        # Công suất và Hủy/Đổi
-        tour_capacity=('tour_capacity', 'sum'),
-        num_customers_cancelled=('num_customers', lambda x: x[x.index.isin(period_tours_all[period_tours_all['status'].isin(['Đã hủy', 'Hoãn'])].index)].sum())
-    ).reset_index()
+    if 'status' in period_tours_all.columns:
+        # Datanet case: has status column
+        route_metrics = period_tours_all.groupby('route').agg(
+            # Thực hiện
+            revenue=('revenue', lambda x: x[period_tours_all['status'] == 'Đã xác nhận'].sum()),
+            gross_profit=('gross_profit', lambda x: x[period_tours_all['status'] == 'Đã xác nhận'].sum()),
+            num_customers_confirmed=('num_customers', lambda x: x[period_tours_all['status'] == 'Đã xác nhận'].sum()),
+            num_customers_all=('num_customers', 'sum'),
+            
+            # Công suất và Hủy/Đổi
+            tour_capacity=('tour_capacity', 'sum'),
+            num_customers_cancelled=('num_customers', lambda x: x[x.index.isin(period_tours_all[period_tours_all['status'].isin(['Đã hủy', 'Hoãn'])].index)].sum())
+        ).reset_index()
+    else:
+        # Kỳ Báo Cáo case: all bookings are confirmed, use cancel_count for cancellations
+        route_metrics = period_tours_all.groupby('route').agg(
+            revenue=('revenue', 'sum'),
+            gross_profit=('gross_profit', 'sum'),
+            num_customers_confirmed=('num_customers', 'sum'),
+            num_customers_all=('num_customers', 'sum'),
+            tour_capacity=('tour_capacity', 'sum'),
+            num_customers_cancelled=('cancel_count', lambda x: pd.to_numeric(x, errors='coerce').fillna(0).sum())
+        ).reset_index()
     
     # Tính Tỷ lệ Lấp đầy và Hủy/Đổi
     route_metrics['occupancy_rate'] = np.where(
@@ -1876,8 +1937,13 @@ def calculate_service_cancellation_metrics(tours_df):
         return {'cancel_rate': 0, 'total_cancelled': 0}
 
     # Giả định: Hủy hợp đồng = Hủy/Hoãn Tour
-    cancelled_services = tours_df[tours_df['status'].isin(['Đã hủy', 'Hoãn'])]
-    total_cancelled = len(cancelled_services)
+    if 'status' in tours_df.columns:
+        cancelled_services = tours_df[tours_df['status'].isin(['Đã hủy', 'Hoãn'])]
+        total_cancelled = len(cancelled_services)
+    elif 'cancel_count' in tours_df.columns:
+        total_cancelled = pd.to_numeric(tours_df['cancel_count'], errors='coerce').fillna(0).sum()
+    else:
+        total_cancelled = 0
     
     cancellation_rate = (total_cancelled / total_services) * 100
     
@@ -1924,12 +1990,25 @@ def calculate_partner_kpis(tours_df):
 def calculate_partner_revenue_metrics(tours_df):
     """Calculate service price metrics (Vùng 2)"""
     
+    # Check if service_cost exists, if not estimate from gross_profit and revenue
+    if 'service_cost' not in tours_df.columns:
+        if 'gross_profit' in tours_df.columns and 'revenue' in tours_df.columns:
+            # Estimate: service_cost = revenue - gross_profit
+            tours_df['service_cost'] = tours_df['revenue'] - tours_df['gross_profit']
+        else:
+            # Fallback: estimate as 70% of revenue
+            tours_df['service_cost'] = tours_df['revenue'] * 0.7 if 'revenue' in tours_df.columns else 0
+    
     # Tính giá dịch vụ (giá trung bình/khách)
     tours_df['service_price_per_pax'] = np.where(
         tours_df['num_customers'] > 0,
         tours_df['service_cost'] / tours_df['num_customers'],
         0
     )
+    
+    # Check if service_type exists
+    if 'service_type' not in tours_df.columns:
+        return pd.DataFrame(columns=['service_type', 'max_price', 'avg_price', 'min_price'])
     
     # Group by service type
     service_metrics = tours_df.groupby('service_type').agg(
@@ -2024,8 +2103,13 @@ def calculate_booking_metrics(tours_df, start_date, end_date):
         total_cancelled = int(cancel_series.sum()) if not cancel_series.empty else 0
     else:
         # Fallback: count cancelled bookings by status if cancel_count not present
-        cancelled_changed = period_tours[period_tours['status'].isin(['Đã hủy', 'Hoãn'])]
-        total_cancelled = int(cancelled_changed['num_customers'].sum()) if not cancelled_changed.empty else 0
+        # Check if 'status' column exists before using it
+        if 'status' in period_tours.columns:
+            cancelled_changed = period_tours[period_tours['status'].isin(['Đã hủy', 'Hoãn'])]
+            total_cancelled = int(cancelled_changed['num_customers'].sum()) if not cancelled_changed.empty else 0
+        else:
+            # No status column and no cancel_count - assume no cancellations
+            total_cancelled = 0
 
     if total_customers_all > 0:
         cancel_change_rate = (total_cancelled / total_customers_all) * 100
@@ -2044,8 +2128,25 @@ def calculate_booking_metrics(tours_df, start_date, end_date):
 
 def create_cancellation_trend_chart(tours_df, start_date, end_date):
     """Creates a line chart showing the trend of cancelled/changed customers (Absolute Count)."""
-    cancelled_df = tours_df[tours_df['status'].isin(['Đã hủy', 'Hoãn'])].copy()
-    period_cancelled = filter_data_by_date(cancelled_df, start_date, end_date)
+    # Sử dụng cancel_count thay vì filter by status
+    period_tours = filter_data_by_date(tours_df, start_date, end_date)
+    
+    if period_tours.empty:
+        return go.Figure().update_layout(height=250, title="Không có dữ liệu")
+    
+    # Check if we have cancel_count column
+    if 'cancel_count' not in period_tours.columns:
+        # Fallback: try to use status column
+        if 'status' in period_tours.columns:
+            cancelled_df = tours_df[tours_df['status'].isin(['Đã hủy', 'Hoãn'])].copy()
+            period_cancelled = filter_data_by_date(cancelled_df, start_date, end_date)
+        else:
+            # No cancellation data available
+            return go.Figure().update_layout(height=250, title="Không có dữ liệu hủy/đổi tour")
+    else:
+        # Use cancel_count column
+        period_cancelled = period_tours.copy()
+        period_cancelled['cancel_count'] = pd.to_numeric(period_cancelled['cancel_count'], errors='coerce').fillna(0)
     
     if period_cancelled.empty:
         return go.Figure().update_layout(height=250, title="Không có dữ liệu hủy/đổi tour")
@@ -2063,11 +2164,24 @@ def create_cancellation_trend_chart(tours_df, start_date, end_date):
         freq_unit = 'M'
         x_title = "Tháng"
     
-    period_cancelled['period'] = pd.to_datetime(period_cancelled['booking_date']).dt.to_period(freq_unit)
+    # Use departure_date if available (for Kỳ Báo Cáo), otherwise use booking_date
+    date_col = 'departure_date' if 'departure_date' in period_cancelled.columns else 'booking_date'
     
-    trend_data = period_cancelled.groupby('period').agg(
-        total_customers=('num_customers', 'sum')
-    ).reset_index()
+    # Check if date column exists
+    if date_col not in period_cancelled.columns:
+        return go.Figure().update_layout(height=250, title=f"Thiếu cột {date_col}")
+    
+    period_cancelled['period'] = pd.to_datetime(period_cancelled[date_col]).dt.to_period(freq_unit)
+    
+    # Aggregate based on whether we're using cancel_count or num_customers
+    if 'cancel_count' in period_cancelled.columns:
+        trend_data = period_cancelled.groupby('period').agg(
+            total_customers=('cancel_count', 'sum')
+        ).reset_index()
+    else:
+        trend_data = period_cancelled.groupby('period').agg(
+            total_customers=('num_customers', 'sum')
+        ).reset_index()
     
     # Định dạng trục X (quan trọng để hiển thị ngày thay vì tuần)
     if freq_unit == 'D':
@@ -2153,8 +2267,11 @@ def create_ratio_trend_chart(tours_df, start_date, end_date, metric='success_rat
         freq_unit = 'M'
         x_title = "Tháng"
     
+    # Use departure_date if available (for Kỳ Báo Cáo), otherwise use booking_date
+    date_col = 'departure_date' if 'departure_date' in period_tours.columns else 'booking_date'
+    
     # 1. Nhóm dữ liệu theo Period và tính các thành phần cần thiết
-    period_tours['period'] = pd.to_datetime(period_tours['booking_date']).dt.to_period(freq_unit)
+    period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period(freq_unit)
 
     # For the requested trend charts we show absolute counts (per your request):
     # - success: number of customers with status 'Đã xác nhận' per period
@@ -2162,6 +2279,13 @@ def create_ratio_trend_chart(tours_df, start_date, end_date, metric='success_rat
     if metric == 'success_rate':
         # compute total successful customers per period
         def sum_confirmed_customers(df):
+            # If no status column, assume all are confirmed (Kỳ Báo Cáo case)
+            if 'status' not in df.columns:
+                try:
+                    s = df['num_customers']
+                    return pd.to_numeric(s, errors='coerce').fillna(0).sum()
+                except Exception:
+                    return 0
             # sum num_customers where status == 'Đã xác nhận'
             try:
                 s = df.loc[df['status'] == 'Đã xác nhận', 'num_customers']
@@ -2187,6 +2311,8 @@ def create_ratio_trend_chart(tours_df, start_date, end_date, metric='success_rat
                     return 0
             else:
                 # fallback: sum num_customers where status in ['Đã hủy','Hoãn']
+                if 'status' not in df.columns:
+                    return 0  # No cancellation data
                 try:
                     s = df.loc[df['status'].isin(['Đã hủy', 'Hoãn']), 'num_customers']
                     return pd.to_numeric(s, errors='coerce').fillna(0).sum()
@@ -2519,23 +2645,26 @@ def create_route_trend_chart(tours_df, start_date, end_date, metric='revenue', t
             height=300
         )
     
+    # Use departure_date if available (for Kỳ Báo Cáo), otherwise use booking_date
+    date_col = 'departure_date' if 'departure_date' in period_tours.columns else 'booking_date'
+    
     # Calculate period length in days
     period_length = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
     
     # Determine grouping granularity
     if period_length <= 7:
         # Daily granularity for week or less
-        period_tours['period'] = pd.to_datetime(period_tours['booking_date']).dt.to_period('D')
+        period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period('D')
         x_title = "Ngày"
         date_format = '%d/%m'
     elif period_length <= 60:
         # Weekly granularity for 2 months or less
-        period_tours['period'] = pd.to_datetime(period_tours['booking_date']).dt.to_period('W')
+        period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period('W')
         x_title = "Tuần"
         date_format = 'T%U'
     else:
         # Monthly granularity for longer periods
-        period_tours['period'] = pd.to_datetime(period_tours['booking_date']).dt.to_period('M')
+        period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period('M')
         x_title = "Tháng"
         date_format = '%m/%Y'
     
