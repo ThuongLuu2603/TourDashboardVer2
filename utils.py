@@ -485,11 +485,11 @@ def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdow
     fig = go.Figure(go.Indicator(
         mode = "gauge+number",
         value = value,
-        domain = {'x': [0, 1], 'y': [1, 1]},
-        title = {'text': title, 'font': {'size': 18}},
+        domain = {'x': [0, 1], 'y': [0.15, 1]},  # Dịch gauge lên để chừa chỗ cho title bên dưới
+        title = {'text': title, 'font': {'size': 16}},
         number = {
             'suffix': "%", 
-            'font': {'size': 20}
+            'font': {'size': 30}
         },
         gauge = {
             'axis': {'range': [None, max_value], 'ticksuffix': "%", 'tickfont': {'size': 12}},
@@ -526,8 +526,8 @@ def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdow
     # Make the gauge larger so it reads well when displayed side-by-side
     # Reduce top margin so gauges sit closer to the page title
     fig.update_layout(
-        height=320,
-        margin=dict(l=10, r=10,t= 8, b=10),
+        height=350,  # Tăng chiều cao để chứa title bên dưới
+        margin=dict(l=10, r=10, t=10, b=40),  # Tăng margin bottom cho title
         hovermode='closest'
     )
     # The invisible scatter used for hover adds default x/y axes; hide them so
@@ -575,7 +575,7 @@ def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdow
 
             fig.add_annotation(
                 x=0.5,
-                y=0.55,
+                y=0.60,
                 xref='paper',
                 yref='paper',
                 xanchor='center',
@@ -583,7 +583,7 @@ def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdow
                 text=ann_text,
                 showarrow=False,
                 align='center',
-                font=dict(size=16, color='#FFFFFF'),
+                font=dict(size=18, color='#FFFFFF'),
                 bordercolor='rgba(255,255,255,0.12)',
                 borderwidth=1,
                 bgcolor='rgba(0,0,0,0.5)',
@@ -1426,12 +1426,54 @@ def create_trend_chart(tours_df, start_date, end_date, metrics=['revenue', 'cust
         x_title = "Tháng"
     
     monthly_data = period_data
-    # Clear any manual display window from session state (not used anymore)
+    # If user provided a manual display window via session state, respect it (manual override)
+    display_window = None
     try:
-        if 'display_period_window' in st.session_state:
-            del st.session_state['display_period_window']
+        display_window = st.session_state.get('display_period_window', None)
     except Exception:
-        pass
+        display_window = None
+    if display_window:
+        # If weekly granularity, interpret display_window as week numbers (e.g., 'T36') and filter by period.week
+        try:
+            if period_length <= 60:
+                # parse ints from display_window entries
+                weeks_sel = []
+                for w in display_window:
+                    try:
+                        num = int(re.sub(r'[^0-9]', '', str(w)))
+                        weeks_sel.append(num)
+                    except Exception:
+                        continue
+
+                def _period_week(p):
+                    try:
+                        return int(p.week)
+                    except Exception:
+                        try:
+                            return int(re.sub(r'[^0-9]', '', str(p)))
+                        except Exception:
+                            return None
+
+                if weeks_sel:
+                    monthly_data['__week'] = monthly_data['period'].apply(_period_week)
+                    filtered = monthly_data[monthly_data['__week'].isin(weeks_sel)].copy()
+                    if not filtered.empty:
+                        monthly_data = filtered.drop(columns=['__week']).reset_index(drop=True)
+                    else:
+                        # fallback to string match if week parsing didn't match
+                        try:
+                            tmp = monthly_data[monthly_data['period_str'].isin(display_window)].reset_index(drop=True)
+                            if not tmp.empty:
+                                monthly_data = tmp
+                        except Exception:
+                            pass
+            else:
+                # For monthly/daily, try string match
+                tmp = monthly_data[monthly_data['period_str'].isin(display_window)].reset_index(drop=True)
+                if not tmp.empty:
+                    monthly_data = tmp
+        except Exception:
+            pass
 
     # Auto-detect active window with extended range (±1 month in weeks)
     # SKIP auto-trim if monthly_data is empty
