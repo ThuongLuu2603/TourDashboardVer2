@@ -983,19 +983,109 @@ with tab1:
             st.info("Không có dữ liệu tiến độ cho khu vực kinh doanh được chọn.")
     
     with col2:
-        st.markdown("##### 📈 Dự báo Hoàn thành Kế hoạch")
-        # Ensure forecast chart respects selected segment when preferring company totals
-        fig_forecast = create_forecast_chart(
-            filtered_tours,
-            filtered_plans,
-            start_date,
-            end_date,
-            date_option,
-            plans_daily_df=st.session_state.get('plans_daily_df'),
-            plans_weekly_df=st.session_state.get('plans_weekly_df'),
-            selected_segment=selected_segment
-        )
-        st.plotly_chart(fig_forecast, use_container_width=True)
+        if use_kybaocao:
+            # Khi dùng Kỳ Báo Cáo: hiển thị breakdown theo Segment + Business Unit
+            st.markdown("##### � Hiệu suất theo Phân khúc & Khu vực")
+            
+            # Prepare data: Revenue, Customers, Profit by Segment
+            segment_revenue = get_segment_breakdown(filtered_tours, start_date, end_date, metric='revenue')
+            segment_customers = get_segment_breakdown(filtered_tours, start_date, end_date, metric='customers')
+            segment_profit = get_segment_breakdown(filtered_tours, start_date, end_date, metric='profit')
+            
+            df_segment = segment_revenue[['segment', 'value']].rename(columns={'value': 'Revenue'}).merge(
+                segment_customers[['segment', 'value']].rename(columns={'value': 'Customers'}), on='segment', how='outer'
+            ).merge(
+                segment_profit[['segment', 'value']].rename(columns={'value': 'Profit'}), on='segment', how='outer'
+            ).fillna(0)
+            
+            # Prepare data: Revenue, Customers, Profit by Region (merged business units)
+            region_groups = {
+                "INBOUND": ["INBOUND"],
+                "FIT TRỤ SỞ": ["FIT TRỤ SỞ"],
+                "GIT TRỤ SỞ": ["GIT TRỤ SỞ"],
+                "ĐÔNG NAM BỘ": ["ĐỒNG NAI", "BÌNH DƯƠNG", "TÂY NINH", "VŨNG TÀU"],
+                "MIỀN BẮC": ["HÀ NỘI", "HẢI PHÒNG", "QUẢNG NINH", "NGHỆ AN", "THANH HÓA"],
+                "BẮC TRUNG BỘ": ["ĐÀ NẴNG", "HUẾ", "QUẢNG NGÃI"],
+                "NAM TRUNG BỘ": ["QUY NHƠN", "NHA TRANG", "ĐẮK LẮK", "LÂM ĐỒNG"],
+                "MIỀN TÂY": ["CẦN THƠ", "AN GIANG", "CÀ MAU", "RẠCH GIÁ", "PHÚ QUỐC"],
+                "DỊCH VỤ KHÁC": ["TRIPU", "TT LÁ XANH", "SIIC", "CARAVAN", "XUYÊN Á"]
+            }
+            
+            # Map business_unit to region and aggregate (NO segment breakdown)
+            region_data = []
+            for region, units in region_groups.items():
+                region_df = filtered_tours[filtered_tours['business_unit'].isin(units)] if 'business_unit' in filtered_tours.columns else pd.DataFrame()
+                if not region_df.empty:
+                    revenue = pd.to_numeric(region_df['revenue'], errors='coerce').fillna(0).sum()
+                    customers = pd.to_numeric(region_df['num_customers'], errors='coerce').fillna(0).sum()
+                    profit = pd.to_numeric(region_df['gross_profit'], errors='coerce').fillna(0).sum()
+                    region_data.append({'region': region, 'revenue': revenue, 'customers': customers, 'profit': profit})
+            
+            df_region = pd.DataFrame(region_data)
+            
+            # Sort regions by revenue (descending)
+            df_region = df_region.sort_values('revenue', ascending=False)
+            
+            # Create combo chart with dual Y-axis: bars (Revenue, Profit) + line (Customers)
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            
+            # Add Revenue bars (primary y-axis)
+            fig.add_trace(
+                go.Bar(name='Doanh thu', x=df_region['region'], y=df_region['revenue'],
+                       marker_color='#636EFA',
+                       text=[format_currency(v) for v in df_region['revenue']],
+                       textposition='outside', textfont=dict(size=9)),
+                secondary_y=False
+            )
+            
+            # Add Profit bars (primary y-axis)
+            fig.add_trace(
+                go.Bar(name='Lãi Gộp', x=df_region['region'], y=df_region['profit'],
+                       marker_color='#FFA15A',
+                       text=[format_currency(v) for v in df_region['profit']],
+                       textposition='outside', textfont=dict(size=9)),
+                secondary_y=False
+            )
+            
+            # Add Customers line (secondary y-axis)
+            fig.add_trace(
+                go.Scatter(name='Lượt khách', x=df_region['region'], y=df_region['customers'],
+                          mode='lines+markers+text', marker=dict(size=10, color='#00CC96'),
+                          line=dict(width=3, color='#00CC96'),
+                          text=[format_number(int(v)) for v in df_region['customers']],
+                          textposition='top center', textfont=dict(size=10, color='#00CC96')),
+                secondary_y=True
+            )
+            
+            # Update layout
+            fig.update_layout(
+                height=350,
+                margin=dict(l=10, r=10, t=30, b=90),
+                barmode='group',
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+                hovermode='x unified'
+            )
+            
+            # Set axis titles
+            fig.update_xaxes(tickangle=-45, title_text="")
+            fig.update_yaxes(title_text="Doanh thu / Lãi Gộp (₫)", secondary_y=False)
+            fig.update_yaxes(title_text="Lượt khách", secondary_y=True)
+            
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            # Khi KHÔNG dùng Kỳ Báo Cáo: hiển thị forecast chart như cũ
+            st.markdown("##### 📈 Dự báo Hoàn thành Kế hoạch")
+            fig_forecast = create_forecast_chart(
+                filtered_tours,
+                filtered_plans,
+                start_date,
+                end_date,
+                date_option,
+                plans_daily_df=st.session_state.get('plans_daily_df'),
+                plans_weekly_df=st.session_state.get('plans_weekly_df'),
+                selected_segment=selected_segment
+            )
+            st.plotly_chart(fig_forecast, use_container_width=True)
     
     st.markdown("---")
     
