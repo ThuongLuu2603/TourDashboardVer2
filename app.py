@@ -338,41 +338,6 @@ with st.sidebar:
                     
                     st.info(f"📊 Sử dụng dữ liệu Kỳ Báo cáo: **Tháng {int(selected_month)}/{current_year}**")
                     
-                    # Debug: Show data info
-                    with st.expander("🔍 Debug: Thông tin dữ liệu Kỳ Báo Cáo"):
-                        st.write(f"**Tên cột report_period:** `{report_period_col}`")
-                        st.write(f"**Kiểu dữ liệu cột:** {kybaocao_df[report_period_col].dtype}")
-                        st.write(f"**Giá trị unique trong cột report_period:**")
-                        st.write(kybaocao_df[report_period_col].unique()[:20])
-                        st.write(f"**Giá trị đang tìm:** {selected_month} (type: {type(selected_month)})")
-                        
-                        # Try filter
-                        df_month = kybaocao_df[kybaocao_df[report_period_col] == selected_month].copy()
-                        st.write(f"**Tổng số dòng dữ liệu tháng {int(selected_month)}:** {len(df_month)}")
-                        st.write(f"**Số cột:** {len(df_month.columns)}")
-                        
-                        if len(df_month) == 0:
-                            st.warning("⚠️ Không tìm thấy dòng nào! Thử filter bằng cách khác...")
-                            # Try convert to int
-                            kybaocao_df_test = kybaocao_df.copy()
-                            kybaocao_df_test[report_period_col] = pd.to_numeric(kybaocao_df_test[report_period_col], errors='coerce')
-                            df_month_test = kybaocao_df_test[kybaocao_df_test[report_period_col] == int(selected_month)].copy()
-                            st.write(f"**Sau khi convert to_numeric:** {len(df_month_test)} dòng")
-                        
-                        if len(df_month) > 0:
-                            st.write("**5 dòng đầu tiên:**")
-                            st.dataframe(df_month.head())
-                        df_month = kybaocao_df[kybaocao_df[report_period_col] == selected_month].copy()
-                        st.write(f"**Tổng số dòng dữ liệu tháng {int(selected_month)}:** {len(df_month)}")
-                        st.write(f"**Số cột:** {len(df_month.columns)}")
-                        if len(df_month) > 0:
-                            st.write("**5 dòng đầu tiên:**")
-                            st.dataframe(df_month.head())
-                        else:
-                            st.warning(f"Không tìm thấy dòng nào có giá trị {selected_month} trong cột {report_period_col}")
-                            st.write("**10 dòng đầu tiên của toàn bộ sheet:**")
-                            st.dataframe(kybaocao_df.head(10))
-                    
                     # Set start_date/end_date cho KPI calculation (để lấy đúng plan tháng đó)
                     from calendar import monthrange
                     start_date = datetime(current_year, int(selected_month), 1)
@@ -1104,18 +1069,6 @@ with tab1:
     
     with col2:
         st.markdown("<div style='font-size: 14px; font-weight: bold; margin-bottom: 10px;'>📊 Xu hướng Doanh thu / Lượt khách / Lãi Gộp theo thời gian</div>", unsafe_allow_html=True)
-        
-        # Debug info
-        if use_kybaocao:
-            with st.expander("🔍 Debug: Dữ liệu trước khi vẽ trend chart"):
-                st.write(f"**Số dòng filtered_tours:** {len(filtered_tours)}")
-                st.write(f"**Columns:** {filtered_tours.columns.tolist()[:10]}")
-                if 'departure_date' in filtered_tours.columns:
-                    st.write(f"**Sample departure_date:** {filtered_tours['departure_date'].head().tolist()}")
-                if 'revenue' in filtered_tours.columns:
-                    st.write(f"**Total revenue:** {filtered_tours['revenue'].sum()}")
-                if 'num_customers' in filtered_tours.columns:
-                    st.write(f"**Total customers:** {filtered_tours['num_customers'].sum()}")
         
         fig_trend = create_trend_chart(filtered_tours, start_date, end_date, metrics=['revenue', 'customers', 'profit'])
         st.plotly_chart(fig_trend, use_container_width=True)
