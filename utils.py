@@ -5,6 +5,8 @@ Utility functions for Vietravel Business Intelligence Dashboard
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import streamlit as st
+import re
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
@@ -484,7 +486,7 @@ def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdow
         mode = "gauge+number",
         value = value,
         domain = {'x': [0, 1], 'y': [1, 1]},
-        title = {'text': title, 'font': {'size': 15}},
+        title = {'text': title, 'font': {'size': 18}},
         number = {
             'suffix': "%", 
             'font': {'size': 20}
@@ -581,7 +583,7 @@ def create_gauge_chart(value, title, max_value=150, threshold=100, unit_breakdow
                 text=ann_text,
                 showarrow=False,
                 align='center',
-                font=dict(size=12, color='#FFFFFF'),
+                font=dict(size=16, color='#FFFFFF'),
                 bordercolor='rgba(255,255,255,0.12)',
                 borderwidth=1,
                 bgcolor='rgba(0,0,0,0.5)',
@@ -1390,32 +1392,8 @@ def create_trend_chart(tours_df, start_date, end_date, metrics=['revenue', 'cust
     
     # Calculate period length in days
     period_length = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
-    original_period_length = period_length  # Lưu lại để hiển thị chú thích
     
-    # GIỚI HẠN PHẠM VI: Luôn hiển thị ±1 tháng xung quanh kỳ được chọn
-    # Ví dụ: Chọn Tháng 10 → Hiển thị Tháng 9, 10, 11
-    from dateutil.relativedelta import relativedelta
-    
-    # Tính start và end của kỳ hiển thị (±1 tháng)
-    start_dt = pd.to_datetime(start_date)
-    end_dt = pd.to_datetime(end_date)
-    
-    # Lùi 1 tháng từ start_date
-    display_start = start_dt - relativedelta(months=1)
-    # Thêm 1 tháng từ end_date
-    display_end = end_dt + relativedelta(months=1)
-    
-    # Re-filter data với phạm vi mở rộng
-    period_tours = filter_data_by_date(confirmed_tours, display_start, display_end)
-    
-    # Lọc theo date_col nếu cần
-    if not period_tours.empty and date_col in period_tours.columns:
-        period_tours = period_tours[
-            (pd.to_datetime(period_tours[date_col]) >= display_start) &
-            (pd.to_datetime(period_tours[date_col]) <= display_end)
-        ]
-    
-    # Determine grouping granularity - ƯU TIÊN TUẦN
+    # Determine grouping granularity
     if period_length <= 7:
         # Daily granularity for week or less
         period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period('D')
@@ -1426,20 +1404,79 @@ def create_trend_chart(tours_df, start_date, end_date, metrics=['revenue', 'cust
         }).reset_index()
         period_data['period_str'] = period_data['period'].dt.strftime('%d/%m')
         x_title = "Ngày"
-    else:
-        # Weekly granularity cho mọi kỳ > 7 ngày
+    elif period_length <= 60:
+        # Weekly granularity for 2 months or less
         period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period('W')
         period_data = period_tours.groupby('period').agg({
             'revenue': 'sum',
             'num_customers': 'sum',
             'gross_profit': 'sum'
         }).reset_index()
-        # Format tuần theo năm (T1, T2,... T52)
         period_data['period_str'] = period_data['period'].apply(lambda x: f"T{x.week}")
         x_title = "Tuần"
+    else:
+        # Monthly granularity for longer periods
+        period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period('M')
+        period_data = period_tours.groupby('period').agg({
+            'revenue': 'sum',
+            'num_customers': 'sum',
+            'gross_profit': 'sum'
+        }).reset_index()
+        period_data['period_str'] = period_data['period'].astype(str)
+        x_title = "Tháng"
     
     monthly_data = period_data
-    
+    # Clear any manual display window from session state (not used anymore)
+    try:
+        if 'display_period_window' in st.session_state:
+            del st.session_state['display_period_window']
+    except Exception:
+        pass
+
+    # Auto-detect active window with extended range (±1 month in weeks)
+    # SKIP auto-trim if monthly_data is empty
+    if not monthly_data.empty:
+        try:
+            rev = monthly_data['revenue'].fillna(0).abs()
+        except Exception:
+            rev = pd.Series([0]*len(monthly_data))
+        try:
+            prof = monthly_data['gross_profit'].fillna(0).abs()
+        except Exception:
+            prof = pd.Series([0]*len(monthly_data))
+        try:
+            cust = monthly_data['num_customers'].fillna(0).abs()
+        except Exception:
+            cust = pd.Series([0]*len(monthly_data))
+
+        # Normalize each series to its max to compare signals across different scales
+        def _norm(s):
+            m = s.max() if len(s) and s.max() > 0 else 0
+            return s / m if m > 0 else s * 0
+
+        norm_rev = _norm(rev)
+        norm_prof = _norm(prof)
+        norm_cust = _norm(cust)
+
+        combined = pd.concat([norm_rev, norm_prof, norm_cust], axis=1).max(axis=1)
+        # Also detect volatility: large changes between adjacent periods
+        combined_diff = combined.diff().abs().fillna(0)
+        # threshold: consider a period active if any metric >= 2% of its max OR change >= 5%
+        active_mask = (combined >= 0.02) | (combined_diff >= 0.05)
+        if active_mask.any():
+            first = int(active_mask.idxmax())
+            last = int(len(active_mask) - 1 - active_mask[::-1].idxmax())
+            # Extend padding: ±1 month (≈4 weeks for weekly data, ±1 period otherwise)
+            if period_length <= 60:
+                # Weekly: add 4 weeks padding on each side
+                start_idx = max(0, first - 4)
+                end_idx = min(len(monthly_data) - 1, last + 4)
+            else:
+                # Monthly/daily: add 1 period
+                start_idx = max(0, first - 1)
+                end_idx = min(len(monthly_data) - 1, last + 1)
+            monthly_data = monthly_data.iloc[start_idx:end_idx + 1].reset_index(drop=True)
+
     # Create figure
     fig = go.Figure()
     
@@ -1500,12 +1537,14 @@ def create_trend_chart(tours_df, start_date, end_date, metrics=['revenue', 'cust
             yaxis='y1'
         ))
     
-    # Thêm chú thích
-    chart_title = "📊 Hiển thị ±1 tháng xung quanh kỳ được chọn"
-    
     fig.update_layout(
-        title=chart_title,
-        xaxis_title=x_title,
+        xaxis=dict(
+            title=x_title,
+            type='category',  # Chỉ hiển thị các category có dữ liệu
+            categoryorder='array',
+            categoryarray=monthly_data['period_str'].tolist(),
+            range=[-0.5, len(monthly_data['period_str']) - 0.5]  # Giới hạn range chỉ các điểm có data
+        ),
         yaxis=dict(title="Doanh thu / Lãi Gộp (₫)", side='left'),
         yaxis2=dict(title="Lượt khách", overlaying='y', side='right'),
         height=250,
@@ -1876,15 +1915,18 @@ def get_unit_breakdown_simple(tours_df, metric='revenue'):
 
 def calculate_partner_breakdown_by_type(tours_df, status_filter):
     """Calculates active/expiring partner count broken down by partner_type."""
-    # Định nghĩa các loại đối tác cố định để đảm bảo Expander hiển thị đủ các loại
-    partner_types = ['Khách sạn', 'Ăn uống', 'Vận chuyển', 'Vé máy bay', 'Điểm tham quan', 'Đối tác nước ngoài']
+    # Logic này yêu cầu cột 'partner_type' phải có trong tours_df
     
-    # Kiểm tra xem có các cột cần thiết không
+    # Kiểm tra cột cần thiết
     if 'contract_status' not in tours_df.columns or 'partner_type' not in tours_df.columns:
-        # Trả về DataFrame với count = 0 cho tất cả các loại
+        # Trả về DataFrame với count = 0 nếu không có cột cần thiết
+        partner_types = ['Khách sạn', 'Ăn uống', 'Vận chuyển', 'Vé máy bay', 'Điểm tham quan', 'Đối tác nước ngoài']
         return pd.DataFrame([{'type': t, 'count': 0} for t in partner_types])
     
     df_filtered = tours_df[tours_df['contract_status'] == status_filter].copy()
+    
+    # Định nghĩa các loại đối tác cố định để đảm bảo Expander hiển thị đủ các loại
+    partner_types = ['Khách sạn', 'Ăn uống', 'Vận chuyển', 'Vé máy bay', 'Điểm tham quan', 'Đối tác nước ngoài']
     
     if df_filtered.empty:
         # Trả về DataFrame với count = 0 cho tất cả các loại
@@ -1913,20 +1955,24 @@ def calculate_partner_performance(partner_df):
     if partner_df.empty:
         return pd.DataFrame(columns=['partner', 'total_revenue', 'avg_feedback', 'total_customers'])
 
-    # Kiểm tra xem có cột feedback_ratio không, nếu không thì tạo giá trị mặc định
-    if 'feedback_ratio' not in partner_df.columns:
-        partner_df = partner_df.copy()
-        partner_df['feedback_ratio'] = 0.85  # Giá trị mặc định 85%
-    
-    partner_performance = partner_df.groupby('partner').agg(
-        total_revenue=('revenue', 'sum'),
-        # Giả định cột feedback_ratio là tỷ lệ phản hồi tích cực (0-1)
-        avg_feedback=('feedback_ratio', 'mean'), 
-        total_customers=('num_customers', 'sum')
-    ).reset_index()
-    
-    # Chuyển đổi tỷ lệ phản hồi thành phần trăm
-    partner_performance['avg_feedback'] = partner_performance['avg_feedback'] * 100
+    # Kiểm tra xem cột feedback_ratio có tồn tại không
+    if 'feedback_ratio' in partner_df.columns:
+        partner_performance = partner_df.groupby('partner').agg(
+            total_revenue=('revenue', 'sum'),
+            avg_feedback=('feedback_ratio', 'mean'), 
+            total_customers=('num_customers', 'sum')
+        ).reset_index()
+        
+        # Chuyển đổi tỷ lệ phản hồi thành phần trăm
+        partner_performance['avg_feedback'] = partner_performance['avg_feedback'] * 100
+    else:
+        # Nếu không có feedback_ratio, tính avg_feedback mặc định = 75
+        partner_performance = partner_df.groupby('partner').agg(
+            total_revenue=('revenue', 'sum'),
+            total_customers=('num_customers', 'sum')
+        ).reset_index()
+        
+        partner_performance['avg_feedback'] = 75.0  # Default feedback score
 
     return partner_performance
 
@@ -1934,7 +1980,7 @@ def calculate_partner_revenue_by_type(partner_df):
     """
     Calculates total revenue grouped by service_type for expander detail.
     """
-    if partner_df.empty or 'service_type' not in partner_df.columns or 'revenue' not in partner_df.columns:
+    if partner_df.empty:
         return pd.DataFrame(columns=['service_type', 'revenue'])
     
     revenue_by_type = partner_df.groupby('service_type')['revenue'].sum().reset_index()
@@ -1945,9 +1991,6 @@ def calculate_partner_revenue_by_type(partner_df):
 # HÀM MỚI CHO VÙNG 2 TAB 3: TÍNH TỔNG TỒN KHO DỊCH VỤ VÀ TỶ LỆ HỦY DỊCH VỤ
 def calculate_service_inventory(tours_df, service_type=None):
     """Calculates total service units (customers) held by type."""
-    if tours_df.empty or 'service_type' not in tours_df.columns or 'num_customers' not in tours_df.columns:
-        return pd.DataFrame(columns=['service_type', 'total_units'])
-    
     df = tours_df.copy()
     
     if service_type and service_type != "Tất cả":
@@ -1988,12 +2031,9 @@ def calculate_service_cancellation_metrics(tours_df):
 def calculate_partner_kpis(tours_df):
     """Calculate core KPIs for Partner Management (Vùng 1)"""
     
-    # Kiểm tra các cột cần thiết
-    required_cols = ['contract_status', 'partner', 'payment_status', 'service_type', 'num_customers', 'revenue']
-    missing_cols = [col for col in required_cols if col not in tours_df.columns]
-    
-    if tours_df.empty or missing_cols:
-        # Trả về giá trị mặc định nếu thiếu cột
+    # Kiểm tra cột cần thiết
+    if 'contract_status' not in tours_df.columns:
+        # Return default values if contract_status doesn't exist
         return {
             'total_active_partners': 0,
             'total_contracts': 0,
@@ -2006,23 +2046,33 @@ def calculate_partner_kpis(tours_df):
     # Lọc dữ liệu hợp đồng đang triển khai (Đơn giản hóa: dùng trạng thái hợp đồng)
     active_contracts = tours_df[tours_df['contract_status'].isin(["Đang triển khai", "Sắp hết hạn"])]
     
-    total_active_partners = active_contracts['partner'].nunique()
-    total_contracts = active_contracts['partner'].count()
+    if 'partner' not in tours_df.columns:
+        total_active_partners = 0
+        total_contracts = 0
+    else:
+        total_active_partners = active_contracts['partner'].nunique()
+        total_contracts = active_contracts['partner'].count()
     
     # Tình trạng hợp đồng
     contracts_status_count = active_contracts.groupby('contract_status')['partner'].count().reset_index()
     contracts_status_count.columns = ['status', 'count']
     
     # Tình trạng thanh toán
-    payment_status_count = tours_df.groupby('payment_status')['partner'].count().reset_index()
-    payment_status_count.columns = ['status', 'count']
+    if 'payment_status' in tours_df.columns and 'partner' in tours_df.columns:
+        payment_status_count = tours_df.groupby('payment_status')['partner'].count().reset_index()
+        payment_status_count.columns = ['status', 'count']
+    else:
+        payment_status_count = pd.DataFrame(columns=['status', 'count'])
     
     # Dịch vụ đang giữ
-    service_inventory = tours_df.groupby('service_type')['num_customers'].sum().reset_index()
-    service_inventory.columns = ['service_type', 'total_units']
+    if 'service_type' in tours_df.columns and 'num_customers' in tours_df.columns:
+        service_inventory = tours_df.groupby('service_type')['num_customers'].sum().reset_index()
+        service_inventory.columns = ['service_type', 'total_units']
+    else:
+        service_inventory = pd.DataFrame(columns=['service_type', 'total_units'])
     
     # Tính tổng doanh thu dịch vụ
-    total_service_revenue = tours_df['revenue'].sum()
+    total_service_revenue = tours_df['revenue'].sum() if 'revenue' in tours_df.columns else 0
     
     return {
         'total_active_partners': total_active_partners,
@@ -2068,58 +2118,25 @@ def calculate_partner_revenue_metrics(tours_df):
 def create_partner_trend_chart(tours_df, start_date, end_date):
     """Creates a combined bar/line chart for partner revenue and customer count (Vùng 3)"""
     
-    # Kiểm tra các cột cần thiết
-    required_cols = ['booking_date', 'revenue', 'num_customers']
-    missing_cols = [col for col in required_cols if col not in tours_df.columns]
-    
-    if tours_df.empty or missing_cols:
-        return go.Figure()
-    
     period_tours = filter_data_by_date(tours_df, start_date, end_date, date_column='booking_date')
     
-    if period_tours.empty:
-        return go.Figure()
-    
-    # Calculate period length in days
+    # Tương tự như create_trend_chart, xác định granularity
     period_length = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
-    
-    # GIỚI HẠN PHẠM VI: Luôn hiển thị ±1 tháng xung quanh kỳ được chọn
-    from dateutil.relativedelta import relativedelta
-    
-    start_dt = pd.to_datetime(start_date)
-    end_dt = pd.to_datetime(end_date)
-    
-    # Lùi 1 tháng từ start_date và thêm 1 tháng từ end_date
-    display_start = start_dt - relativedelta(months=1)
-    display_end = end_dt + relativedelta(months=1)
-    
-    # Re-filter data với phạm vi mở rộng
-    all_tours = filter_data_by_date(tours_df, display_start, display_end, date_column='booking_date')
-    
-    if not all_tours.empty:
-        period_tours = all_tours[
-            (pd.to_datetime(all_tours['booking_date']) >= display_start) &
-            (pd.to_datetime(all_tours['booking_date']) <= display_end)
-        ]
-    
-    # Determine grouping granularity - ƯU TIÊN TUẦN
-    if period_length <= 7:
-        # Daily for 1 week or less
-        freq = 'D'
-        x_title = "Ngày"
-        date_col = 'day'
-        period_tours['day'] = pd.to_datetime(period_tours['booking_date']).dt.to_period('D').apply(lambda x: x.start_time)
-        df_trend = period_tours.groupby('day').agg(
-            revenue=('revenue', 'sum'),
-            customers=('num_customers', 'sum')
-        ).reset_index()
-    else:
-        # Weekly granularity cho mọi kỳ > 7 ngày
+    if period_length <= 60:
         freq = 'W'
         x_title = "Tuần"
         date_col = 'week_start'
         period_tours['week_start'] = pd.to_datetime(period_tours['booking_date']).dt.to_period('W').apply(lambda x: x.start_time)
         df_trend = period_tours.groupby('week_start').agg(
+            revenue=('revenue', 'sum'),
+            customers=('num_customers', 'sum')
+        ).reset_index()
+    else:
+        freq = 'M'
+        x_title = "Tháng"
+        date_col = 'month_start'
+        period_tours['month_start'] = pd.to_datetime(period_tours['booking_date']).dt.to_period('M').apply(lambda x: x.start_time)
+        df_trend = period_tours.groupby('month_start').agg(
             revenue=('revenue', 'sum'),
             customers=('num_customers', 'sum')
         ).reset_index()
@@ -2153,7 +2170,10 @@ def create_partner_trend_chart(tours_df, start_date, end_date):
     fig.update_yaxes(title_text="Doanh thu (₫)", secondary_y=False, tickformat=".2s")
     # Thiết lập trục Y phụ (Khách)
     fig.update_yaxes(title_text="Số lượng Khách", secondary_y=True, showgrid=False)
-    fig.update_xaxes(title_text=x_title)
+    fig.update_xaxes(
+        title_text=x_title,
+        type='category'
+    )
 
     return fig
 
@@ -2232,47 +2252,19 @@ def create_cancellation_trend_chart(tours_df, start_date, end_date):
 
     period_length = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
     
-    # Use departure_date if available (for Kỳ Báo Cáo), otherwise use booking_date
-    date_col = 'departure_date' if 'departure_date' in period_cancelled.columns else 'booking_date'
-    
-    # GIỚI HẠN PHẠM VI: Luôn hiển thị ±1 tháng xung quanh kỳ được chọn
-    from dateutil.relativedelta import relativedelta
-    
-    start_dt = pd.to_datetime(start_date)
-    end_dt = pd.to_datetime(end_date)
-    
-    # Lùi 1 tháng từ start_date và thêm 1 tháng từ end_date
-    display_start = start_dt - relativedelta(months=1)
-    display_end = end_dt + relativedelta(months=1)
-    
-    # Re-filter data với phạm vi mở rộng
-    period_cancelled = filter_data_by_date(tours_df, display_start, display_end)
-    
-    # Check if we have cancel_count column
-    if 'cancel_count' not in period_cancelled.columns:
-        if 'status' in period_cancelled.columns:
-            cancelled_df = tours_df[tours_df['status'].isin(['Đã hủy', 'Hoãn'])].copy()
-            period_cancelled = filter_data_by_date(cancelled_df, display_start, display_end)
-        else:
-            return go.Figure().update_layout(height=250, title="Không có dữ liệu hủy/đổi tour")
-    else:
-        period_cancelled['cancel_count'] = pd.to_numeric(period_cancelled['cancel_count'], errors='coerce').fillna(0)
-    
-    if not period_cancelled.empty and date_col in period_cancelled.columns:
-        period_cancelled = period_cancelled[
-            (pd.to_datetime(period_cancelled[date_col]) >= display_start) &
-            (pd.to_datetime(period_cancelled[date_col]) <= display_end)
-        ]
-    
-    # Determine grouping granularity - ƯU TIÊN TUẦN
-    if period_length <= 7:
-        # Daily for 1 week or less
+    # SỬA LỖI: Ưu tiên NGÀY cho kỳ ngắn (< 30 ngày)
+    if period_length <= 30: # <--- Ưu tiên Ngày cho kỳ 1 tháng hoặc ít hơn
         freq_unit = 'D'
         x_title = "Ngày"
-    else:
-        # Weekly granularity cho mọi kỳ > 7 ngày
+    elif period_length <= 60:
         freq_unit = 'W'
         x_title = "Tuần"
+    else:
+        freq_unit = 'M'
+        x_title = "Tháng"
+    
+    # Use departure_date if available (for Kỳ Báo Cáo), otherwise use booking_date
+    date_col = 'departure_date' if 'departure_date' in period_cancelled.columns else 'booking_date'
     
     # Check if date column exists
     if date_col not in period_cancelled.columns:
@@ -2290,16 +2282,54 @@ def create_cancellation_trend_chart(tours_df, start_date, end_date):
             total_customers=('num_customers', 'sum')
         ).reset_index()
     
-    # Định dạng trục X nhất quán
+    # Định dạng trục X (quan trọng để hiển thị ngày thay vì tuần)
     if freq_unit == 'D':
         trend_data['period_str'] = trend_data['period'].dt.strftime('%d/%m')
+        # Đặt tên cột y cho đúng với số lượng tuyệt đối
         y_label = "Lượt khách hủy/đổi" 
+    elif freq_unit == 'W':
+        trend_data['period_str'] = trend_data['period'].apply(lambda x: f"W{x.week}-{x.year}")
+        y_label = "Lượt khách hủy/đổi"
     else:
-        # Format tuần theo năm (T1, T2,... T52)
-        trend_data['period_str'] = trend_data['period'].apply(lambda x: f"T{x.week}")
+        trend_data['period_str'] = trend_data['period'].astype(str)
         y_label = "Lượt khách hủy/đổi"
         
     
+    # Clear any manual display window from session state
+    try:
+        if 'display_period_window' in st.session_state:
+            del st.session_state['display_period_window']
+    except Exception:
+        pass
+    
+    # Auto-detect active window based on normalized values
+    if not trend_data.empty:
+        try:
+            # Normalize to 0-1 scale
+            max_val = trend_data['total_customers'].max()
+            if max_val > 0:
+                trend_data['normalized'] = trend_data['total_customers'] / max_val
+                # Calculate volatility (period-to-period change)
+                trend_data['diff'] = trend_data['normalized'].diff().abs()
+                # Mark active periods: significant value OR high volatility
+                trend_data['active'] = (trend_data['normalized'] >= 0.02) | (trend_data['diff'] >= 0.05)
+                # Find first and last active periods
+                active_indices = trend_data[trend_data['active']].index.tolist()
+                if active_indices:
+                    first, last = min(active_indices), max(active_indices)
+                    # Add padding: ±4 weeks for weekly, ±1 for others
+                    padding = 4 if freq_unit == 'W' else 1
+                    start_idx = max(0, first - padding)
+                    end_idx = min(len(trend_data) - 1, last + padding)
+                    trend_data = trend_data.iloc[start_idx:end_idx + 1]
+        except Exception:
+            pass  # Keep all data if auto-detection fails
+    
+    # Remove temporary columns if they exist
+    for col in ['normalized', 'diff', 'active']:
+        if col in trend_data.columns:
+            trend_data = trend_data.drop(columns=[col])
+
     fig = px.line(
         trend_data, 
         x='period_str', 
@@ -2308,7 +2338,13 @@ def create_cancellation_trend_chart(tours_df, start_date, end_date):
         markers=True
     )
     
-    fig.update_xaxes(title=x_title)
+    fig.update_xaxes(
+        title=x_title,
+        type='category',
+        categoryorder='array',
+        categoryarray=trend_data['period_str'].tolist(),
+        range=[-0.5, len(trend_data['period_str']) - 0.5]
+    )
     fig.update_yaxes(title=y_label)
     fig.update_layout(height=250, margin=dict(t=30, b=10, l=10, r=10), showlegend=False)
     
@@ -2357,40 +2393,22 @@ def create_ratio_trend_chart(tours_df, start_date, end_date, metric='success_rat
     if period_tours.empty:
         return go.Figure().update_layout(height=250, title=f"Không có dữ liệu {title}")
 
-    # Calculate period length in days
+    # Xác định độ phân giải (Tuần hoặc Tháng)
     period_length = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
+    
+    # SỬA LỖI: Buộc theo NGÀY nếu kỳ báo cáo ngắn (<= 7 ngày)
+    if period_length <= 7:
+        freq_unit = 'D' # <--- SỬA THÀNH NGÀY
+        x_title = "Ngày"
+    elif period_length <= 60:
+        freq_unit = 'W'
+        x_title = "Tuần"
+    else:
+        freq_unit = 'M'
+        x_title = "Tháng"
     
     # Use departure_date if available (for Kỳ Báo Cáo), otherwise use booking_date
     date_col = 'departure_date' if 'departure_date' in period_tours.columns else 'booking_date'
-    
-    # GIỚI HẠN PHẠM VI: Luôn hiển thị ±1 tháng xung quanh kỳ được chọn
-    from dateutil.relativedelta import relativedelta
-    
-    start_dt = pd.to_datetime(start_date)
-    end_dt = pd.to_datetime(end_date)
-    
-    # Lùi 1 tháng từ start_date và thêm 1 tháng từ end_date
-    display_start = start_dt - relativedelta(months=1)
-    display_end = end_dt + relativedelta(months=1)
-    
-    # Re-filter data với phạm vi mở rộng
-    period_tours = filter_data_by_date(tours_df, display_start, display_end)
-    
-    if not period_tours.empty and date_col in period_tours.columns:
-        period_tours = period_tours[
-            (pd.to_datetime(period_tours[date_col]) >= display_start) &
-            (pd.to_datetime(period_tours[date_col]) <= display_end)
-        ]
-    
-    # Determine grouping granularity - ƯU TIÊN TUẦN
-    if period_length <= 7:
-        # Daily for 1 week or less
-        freq_unit = 'D'
-        x_title = "Ngày"
-    else:
-        # Weekly granularity cho mọi kỳ > 7 ngày
-        freq_unit = 'W'
-        x_title = "Tuần"
     
     # 1. Nhóm dữ liệu theo Period và tính các thành phần cần thiết
     period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period(freq_unit)
@@ -2447,14 +2465,49 @@ def create_ratio_trend_chart(tours_df, start_date, end_date, metric='success_rat
         y_label = "Lượt khách hủy/đổi"
         color_seq = ['#EF553B']
     
-    # Định dạng trục X nhất quán
+    # Định dạng trục X (quan trọng để hiển thị ngày thay vì tuần)
     if freq_unit == 'D':
         trend_data['period_str'] = trend_data['period'].dt.strftime('%d/%m')
+    elif freq_unit == 'W':
+        trend_data['period_str'] = trend_data['period'].apply(lambda x: f"W{x.week}-{x.year}")
     else:
-        # Format tuần theo năm (T1, T2,... T52)
-        trend_data['period_str'] = trend_data['period'].apply(lambda x: f"T{x.week}")
-        
+        trend_data['period_str'] = trend_data['period'].astype(str)
+
+    # Clear any manual display window from session state
+    try:
+        if 'display_period_window' in st.session_state:
+            del st.session_state['display_period_window']
+    except Exception:
+        pass
     
+    # Auto-detect active window based on normalized values
+    if not trend_data.empty:
+        try:
+            # Normalize to 0-1 scale
+            max_val = trend_data['value'].abs().max()
+            if max_val > 0:
+                trend_data['normalized'] = trend_data['value'].abs() / max_val
+                # Calculate volatility (period-to-period change)
+                trend_data['diff'] = trend_data['normalized'].diff().abs()
+                # Mark active periods: significant value OR high volatility
+                trend_data['active'] = (trend_data['normalized'] >= 0.02) | (trend_data['diff'] >= 0.05)
+                # Find first and last active periods
+                active_indices = trend_data[trend_data['active']].index.tolist()
+                if active_indices:
+                    first, last = min(active_indices), max(active_indices)
+                    # Add padding: ±4 weeks for weekly, ±1 for others
+                    padding = 4 if freq_unit == 'W' else 1
+                    start_idx = max(0, first - padding)
+                    end_idx = min(len(trend_data) - 1, last + padding)
+                    trend_data = trend_data.iloc[start_idx:end_idx + 1]
+        except Exception:
+            pass  # Keep all data if auto-detection fails
+    
+    # Remove temporary columns if they exist
+    for col in ['normalized', 'diff', 'active']:
+        if col in trend_data.columns:
+            trend_data = trend_data.drop(columns=[col])
+
     # 3. Tạo biểu đồ đường
     fig = px.line(
         trend_data,
@@ -2467,7 +2520,13 @@ def create_ratio_trend_chart(tours_df, start_date, end_date, metric='success_rat
     # Force integer-like hover/labels for counts
     fig.update_traces(hovertemplate='%{x}<br>%{y:.0f}<extra></extra>')
     
-    fig.update_xaxes(title=x_title)
+    fig.update_xaxes(
+        title=x_title,
+        type='category',
+        categoryorder='array',
+        categoryarray=trend_data['period_str'].tolist(),
+        range=[-0.5, len(trend_data['period_str']) - 0.5]
+    )
     fig.update_yaxes(title=y_label)
     fig.update_layout(height=250, margin=dict(t=30, b=10, l=10, r=10), showlegend=False)
     
@@ -2772,36 +2831,22 @@ def create_route_trend_chart(tours_df, start_date, end_date, metric='revenue', t
     # Calculate period length in days
     period_length = (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days
     
-    # GIỚI HẠN PHẠM VI: Luôn hiển thị ±1 tháng xung quanh kỳ được chọn
-    from dateutil.relativedelta import relativedelta
-    
-    start_dt = pd.to_datetime(start_date)
-    end_dt = pd.to_datetime(end_date)
-    
-    # Lùi 1 tháng từ start_date và thêm 1 tháng từ end_date
-    display_start = start_dt - relativedelta(months=1)
-    display_end = end_dt + relativedelta(months=1)
-    
-    # Re-filter data với phạm vi mở rộng
-    period_tours = filter_data_by_date(confirmed_tours, display_start, display_end)
-    
-    if not period_tours.empty and date_col in period_tours.columns:
-        period_tours = period_tours[
-            (pd.to_datetime(period_tours[date_col]) >= display_start) &
-            (pd.to_datetime(period_tours[date_col]) <= display_end)
-        ]
-    
-    # Determine grouping granularity - ƯU TIÊN TUẦN
+    # Determine grouping granularity
     if period_length <= 7:
         # Daily granularity for week or less
         period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period('D')
         x_title = "Ngày"
         date_format = '%d/%m'
-    else:
-        # Weekly granularity cho mọi kỳ > 7 ngày
+    elif period_length <= 60:
+        # Weekly granularity for 2 months or less
         period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period('W')
         x_title = "Tuần"
         date_format = 'T%U'
+    else:
+        # Monthly granularity for longer periods
+        period_tours['period'] = pd.to_datetime(period_tours[date_col]).dt.to_period('M')
+        x_title = "Tháng"
+        date_format = '%m/%Y'
     
     # Get top N routes by total metric value
     top_routes = period_tours.groupby('route')[metric].sum().nlargest(top_n).index.tolist()
@@ -2818,11 +2863,50 @@ def create_route_trend_chart(tours_df, start_date, end_date, metric='revenue', t
     # Format period for display AFTER sorting
     if period_length <= 7:
         trend_data['period_str'] = trend_data['period'].dt.strftime(date_format)
-    else:
+    elif period_length <= 60:
         trend_data['period_str'] = trend_data['period'].apply(lambda x: f"T{x.week}")
+    else:
+        trend_data['period_str'] = trend_data['period'].astype(str)
     
     # Get unique periods in chronological order for x-axis
     unique_periods = trend_data[['period', 'period_str']].drop_duplicates().sort_values('period')['period_str'].tolist()
+
+    # Clear any manual display window from session state
+    try:
+        if 'display_period_window' in st.session_state:
+            del st.session_state['display_period_window']
+    except Exception:
+        pass
+
+    # Determine active window across all routes: keep periods where any route has non-zero value
+    pivot = trend_data.pivot_table(index='period_str', columns='route', values=metric, aggfunc='sum', fill_value=0)
+    if not pivot.empty:
+        series = pivot.abs().sum(axis=1)
+        if series.sum() > 0:
+            nseries = series / series.max()
+            ndiff = nseries.diff().abs().fillna(0)
+            active_mask = (nseries >= 0.02) | (ndiff >= 0.05)
+            if active_mask.any():
+                # get positions within unique_periods where active_mask True
+                active_periods = list(active_mask[active_mask].index)
+                first_period = active_periods[0]
+                last_period = active_periods[-1]
+                try:
+                    first_pos = unique_periods.index(first_period)
+                    last_pos = unique_periods.index(last_period)
+                    # Enhanced padding: ±4 weeks for weekly, ±1 for others
+                    padding = 4 if period_length <= 60 else 1
+                    start_pos = max(0, first_pos - padding)
+                    end_pos = min(len(unique_periods) - 1, last_pos + padding)
+                    allowed_periods = unique_periods[start_pos:end_pos + 1]
+                except Exception:
+                    allowed_periods = unique_periods
+            else:
+                allowed_periods = unique_periods
+        else:
+            allowed_periods = unique_periods
+    else:
+        allowed_periods = unique_periods
     
     # Create figure
     fig = go.Figure()
@@ -2835,6 +2919,9 @@ def create_route_trend_chart(tours_df, start_date, end_date, metric='revenue', t
         route_data = trend_data[trend_data['route'] == route].copy()
         # Sort by period again to ensure line connects in correct order
         route_data = route_data.sort_values('period')
+        # If allowed_periods computed, restrict the route series to that window
+        if 'allowed_periods' in locals():
+            route_data = route_data[route_data['period_str'].isin(allowed_periods)]
         
         # Format text labels for data points based on metric
         if metric == 'revenue' or metric == 'gross_profit':
@@ -2886,7 +2973,8 @@ def create_route_trend_chart(tours_df, start_date, end_date, metric='revenue', t
         xaxis=dict(
             type='category',
             categoryorder='array',
-            categoryarray=unique_periods
+            categoryarray=allowed_periods if 'allowed_periods' in locals() else unique_periods,
+            range=[-0.5, (len(allowed_periods) - 1) - 0.5] if 'allowed_periods' in locals() else [-0.5, len(unique_periods) - 0.5]
         )
     )
     

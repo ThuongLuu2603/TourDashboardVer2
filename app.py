@@ -200,17 +200,15 @@ if not st.session_state.get('data_loaded', False):
     # Show a banner including load time if available
     meta = st.session_state.get('data_meta', {})
     loader_time = meta.get('loader_elapsed_sec') if isinstance(meta, dict) else None
-    if loader_time is not None:
-        st.sidebar.info(f"Dữ liệu được tải trong {loader_time:.1f}s (cached)")
+    # Không hiển thị thông báo load time nữa
     # Show banner if tours or plan sheets were used / parsed
     if meta.get('used_excel') or meta.get('used_sheet') or meta.get('parsed_plan_rows', 0) > 0:
+        # Lưu thông tin vào session state thay vì hiển thị
         files = st.session_state['data_meta'].get('processed_files', [])
         plan_files = st.session_state['data_meta'].get('processed_plan_files', [])
         parsed = st.session_state['data_meta'].get('parsed_rows', 0)
         parsed_plan = st.session_state['data_meta'].get('parsed_plan_rows', 0)
-        files_str = ', '.join(files) if files else '(<no data files>)'
-        plan_files_str = ', '.join(plan_files) if plan_files else '(<no plan files>)'
-        st.sidebar.success(f"Dữ liệu tours: {files_str} — {parsed} dòng parsed; Kế hoạch: {plan_files_str} — {parsed_plan} dòng parsed")
+        # Không hiển thị thông báo
 
 # Load data from session state
 tours_df = st.session_state.tours_df
@@ -292,17 +290,10 @@ with st.sidebar:
                     # Read CSV
                     df_raw = pd.read_csv(csv_url)
                     st.session_state['kybaocao_df'] = df_raw
-                    
-                    # Debug: show first few rows and columns
-                    st.sidebar.caption(f"📊 Loaded {len(df_raw)} rows, {len(df_raw.columns)} columns")
-                    
-                    # Show column names in expander
-                    with st.sidebar.expander("🔍 Debug: Column names"):
-                        for i, col in enumerate(df_raw.columns[:25]):  # First 25 columns
-                            st.text(f"Col {i} ({chr(65+i) if i < 26 else 'Col'+str(i)}): {col}")
                 except Exception as e:
-                    st.error(f"Lỗi tải dữ liệu Kỳ Báo Cáo: {e}")
+                    # Lỗi load dữ liệu - lưu vào session state thay vì hiện thông báo
                     st.session_state['kybaocao_df'] = pd.DataFrame()
+                    st.session_state['kybaocao_load_error'] = str(e)
         
         kybaocao_df = st.session_state.get('kybaocao_df', pd.DataFrame())
         
@@ -347,11 +338,79 @@ with st.sidebar:
                     
                     st.info(f"📊 Sử dụng dữ liệu Kỳ Báo cáo: **Tháng {int(selected_month)}/{current_year}**")
                     
+                    # Debug: Show data info
+                    with st.expander("🔍 Debug: Thông tin dữ liệu Kỳ Báo Cáo"):
+                        st.write(f"**Tên cột report_period:** `{report_period_col}`")
+                        st.write(f"**Kiểu dữ liệu cột:** {kybaocao_df[report_period_col].dtype}")
+                        st.write(f"**Giá trị unique trong cột report_period:**")
+                        st.write(kybaocao_df[report_period_col].unique()[:20])
+                        st.write(f"**Giá trị đang tìm:** {selected_month} (type: {type(selected_month)})")
+                        
+                        # Try filter
+                        df_month = kybaocao_df[kybaocao_df[report_period_col] == selected_month].copy()
+                        st.write(f"**Tổng số dòng dữ liệu tháng {int(selected_month)}:** {len(df_month)}")
+                        st.write(f"**Số cột:** {len(df_month.columns)}")
+                        
+                        if len(df_month) == 0:
+                            st.warning("⚠️ Không tìm thấy dòng nào! Thử filter bằng cách khác...")
+                            # Try convert to int
+                            kybaocao_df_test = kybaocao_df.copy()
+                            kybaocao_df_test[report_period_col] = pd.to_numeric(kybaocao_df_test[report_period_col], errors='coerce')
+                            df_month_test = kybaocao_df_test[kybaocao_df_test[report_period_col] == int(selected_month)].copy()
+                            st.write(f"**Sau khi convert to_numeric:** {len(df_month_test)} dòng")
+                        
+                        if len(df_month) > 0:
+                            st.write("**5 dòng đầu tiên:**")
+                            st.dataframe(df_month.head())
+                        df_month = kybaocao_df[kybaocao_df[report_period_col] == selected_month].copy()
+                        st.write(f"**Tổng số dòng dữ liệu tháng {int(selected_month)}:** {len(df_month)}")
+                        st.write(f"**Số cột:** {len(df_month.columns)}")
+                        if len(df_month) > 0:
+                            st.write("**5 dòng đầu tiên:**")
+                            st.dataframe(df_month.head())
+                        else:
+                            st.warning(f"Không tìm thấy dòng nào có giá trị {selected_month} trong cột {report_period_col}")
+                            st.write("**10 dòng đầu tiên của toàn bộ sheet:**")
+                            st.dataframe(kybaocao_df.head(10))
+                    
                     # Set start_date/end_date cho KPI calculation (để lấy đúng plan tháng đó)
                     from calendar import monthrange
                     start_date = datetime(current_year, int(selected_month), 1)
                     last_day = monthrange(current_year, int(selected_month))[1]
                     end_date = datetime(current_year, int(selected_month), last_day, 23, 59, 59)
+                    # Prepare period list (weekly) for manual display window selection
+                    try:
+                        df_month = kybaocao_df[kybaocao_df[report_period_col] == selected_month].copy()
+                        # Try column index 4 (E) as departure_date fallback
+                        departure_col = None
+                        if len(df_month.columns) > 4:
+                            departure_col = df_month.columns[4]
+                        for c in df_month.columns:
+                            if any(k in str(c).lower() for k in ['departure', 'ngày', 'khởi', 'start']):
+                                departure_col = c
+                                break
+                        if departure_col is not None and departure_col in df_month.columns:
+                            try:
+                                dates = pd.to_datetime(df_month[departure_col], errors='coerce')
+                                weeks = dates.dt.to_period('W').dropna().unique()
+                                # sort by week start
+                                weeks_sorted = sorted(list(weeks), key=lambda p: p.start_time)
+                                period_strs = [f"T{int(p.week)}" for p in weeks_sorted]
+                                st.session_state['ky_period_list'] = period_strs
+                            except Exception:
+                                st.session_state['ky_period_list'] = []
+                        else:
+                            st.session_state['ky_period_list'] = []
+                    except Exception:
+                        st.session_state['ky_period_list'] = []
+                    # If we couldn't derive weeks from the sheet, fallback to date range weeks
+                    if not st.session_state.get('ky_period_list'):
+                        try:
+                            dates = pd.date_range(start_date, end_date)
+                            weeks = sorted(dates.to_series().dt.isocalendar().week.unique())
+                            st.session_state['ky_period_list'] = [f"T{int(w)}" for w in weeks]
+                        except Exception:
+                            st.session_state['ky_period_list'] = []
                 else:
                     st.warning(f"Không tìm thấy dữ liệu tháng trong cột '{report_period_col}'")
                     start_date = datetime(today.year, today.month, 1)
@@ -383,7 +442,7 @@ with st.sidebar:
         end_date = datetime.combine(end_date, datetime.max.time())
     
     # Hiển thị kỳ báo cáo (chỉ hiển thị nếu không phải "Kỳ Báo cáo")
-    if date_option != "Kỳ Báo cáo":
+    if date_option != "Kỳ Báo Cáo":
         st.markdown(f"**Kỳ báo cáo:** {start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}")
     
     # Business unit filter
@@ -600,17 +659,10 @@ if st.session_state.get('use_kybaocao', False):
     
     if not kybaocao_df.empty and selected_month and report_period_col:
         # Filter theo tháng trong cột V
-        # Chuyển đổi cột về số để so sánh
+        # Chuyển đổi cột về số để so sánh - PHẢI tạo copy trước
+        kybaocao_df = kybaocao_df.copy()
         kybaocao_df[report_period_col] = pd.to_numeric(kybaocao_df[report_period_col], errors='coerce')
-        tours_df = kybaocao_df[kybaocao_df[report_period_col] == selected_month].copy()
-        
-        # Debug: Show column names BEFORE mapping
-        st.sidebar.caption(f"Original columns: {', '.join(tours_df.columns.tolist()[:10])}...")
-        
-        # Show ALL columns in debug mode
-        with st.sidebar.expander("🔍 All original columns"):
-            for i, col in enumerate(tours_df.columns):
-                st.text(f"{i}: {col}")
+        tours_df = kybaocao_df[kybaocao_df[report_period_col] == int(selected_month)].copy()
         
         # COLUMN NAME MAPPING: Map Kỳ Báo Cáo column names to expected names
         # Based on exact column positions from Google Sheets
@@ -661,16 +713,9 @@ if st.session_state.get('use_kybaocao', False):
         if len(tours_df.columns) > 21:
             column_mapping[tours_df.columns[21]] = 'report_period'
         
-        # Show mapping results
-        if column_mapping:
-            with st.sidebar.expander("✅ Column mappings applied"):
-                for orig, new in column_mapping.items():
-                    st.text(f"{orig} → {new}")
-        
         # Apply column mapping
         if column_mapping:
             tours_df = tours_df.rename(columns=column_mapping)
-            st.sidebar.success(f"✅ Mapped {len(column_mapping)} columns")
         
         # Xóa cột report_period để tránh conflict với logic hiện tại
         if 'report_period' in tours_df.columns:
@@ -716,21 +761,16 @@ if st.session_state.get('use_kybaocao', False):
         if 'service_type' not in tours_df.columns:
             tours_df['service_type'] = 'Tour'
         
-        # Kiểm tra và log các columns quan trọng
-        required_cols = ['revenue', 'gross_profit', 'num_customers', 'booking_date', 'business_unit', 'route', 'segment']
-        missing_cols = [col for col in required_cols if col not in tours_df.columns]
+        if 'partner_type' not in tours_df.columns:
+            tours_df['partner_type'] = 'Khách sạn'
         
-        if missing_cols:
-            st.sidebar.error(f"⚠️ Thiếu columns: {', '.join(missing_cols)}")
-            st.sidebar.info(f"Available columns: {', '.join(tours_df.columns.tolist())}")
-        else:
-            st.sidebar.success(f"✅ All required columns present")
+        if 'feedback_ratio' not in tours_df.columns:
+            tours_df['feedback_ratio'] = 0.75  # Default 75% feedback
         
         used_sheet = True  # Mark as valid data source
-        
-        st.sidebar.success(f"✅ Đã tải {len(tours_df)} dòng dữ liệu tháng {selected_month}")
     else:
-        st.warning("Không tìm thấy dữ liệu cho tháng đã chọn")
+        # Không có dữ liệu cho tháng đã chọn - không hiện warning
+        pass
 
 if used_sheet:
     tours_filtered_dimensional = tours_df.copy()
@@ -812,8 +852,15 @@ if use_kybaocao:
         "Tháng",  # Force period_type = "Tháng" để lấy plan tháng
         selected_segment
     )
-    # Không filter theo date cho filtered_tours vì data đã được filter theo tháng
-    filtered_tours = tours_filtered_dimensional.copy()
+    # Filter thêm theo departure_date để chỉ lấy tour khởi hành trong tháng được chọn
+    if 'departure_date' in tours_filtered_dimensional.columns:
+        tours_filtered_dimensional['departure_date'] = pd.to_datetime(tours_filtered_dimensional['departure_date'], errors='coerce')
+        filtered_tours = tours_filtered_dimensional[
+            (tours_filtered_dimensional['departure_date'] >= start_date) &
+            (tours_filtered_dimensional['departure_date'] <= end_date)
+        ].copy()
+    else:
+        filtered_tours = tours_filtered_dimensional.copy()
 else:
     kpis = cached_calculate_kpis(
         tours_filtered_dimensional,
@@ -1057,6 +1104,19 @@ with tab1:
     
     with col2:
         st.markdown("<div style='font-size: 14px; font-weight: bold; margin-bottom: 10px;'>📊 Xu hướng Doanh thu / Lượt khách / Lãi Gộp theo thời gian</div>", unsafe_allow_html=True)
+        
+        # Debug info
+        if use_kybaocao:
+            with st.expander("🔍 Debug: Dữ liệu trước khi vẽ trend chart"):
+                st.write(f"**Số dòng filtered_tours:** {len(filtered_tours)}")
+                st.write(f"**Columns:** {filtered_tours.columns.tolist()[:10]}")
+                if 'departure_date' in filtered_tours.columns:
+                    st.write(f"**Sample departure_date:** {filtered_tours['departure_date'].head().tolist()}")
+                if 'revenue' in filtered_tours.columns:
+                    st.write(f"**Total revenue:** {filtered_tours['revenue'].sum()}")
+                if 'num_customers' in filtered_tours.columns:
+                    st.write(f"**Total customers:** {filtered_tours['num_customers'].sum()}")
+        
         fig_trend = create_trend_chart(filtered_tours, start_date, end_date, metrics=['revenue', 'customers', 'profit'])
         st.plotly_chart(fig_trend, use_container_width=True)
 
